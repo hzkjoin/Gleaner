@@ -165,9 +165,10 @@ struct FilePagingTests {
     }
 
     @Test func contextLengthCanBeSet() {
-        var configuration = ProviderPreset.all[2].configuration
+        var configuration = try! #require(ProviderPreset.named("DeepSeek")).configuration
         #expect(configuration.contextTokens == 256_000)
-        #expect(ProviderPreset.all[3].configuration.contextTokens == 128_000)
+        #expect(ProviderPreset.all.filter { !$0.configuration.isLocal }.allSatisfy { $0.configuration.contextTokens == 256_000 })
+        #expect(ProviderPreset.default.configuration.contextTokens == 32_000)
         configuration.contextK = 1_000
         #expect(configuration.contextTokens == 1_000_000)
         #expect(configuration.contextBudget.attachments == 60_000)

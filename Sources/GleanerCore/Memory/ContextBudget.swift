@@ -42,13 +42,9 @@ extension ProviderConfiguration {
         return estimatedContextK * 1_000
     }
 
-    /// A guess at the context length in thousands of tokens, used unless the user sets one.
-    public var estimatedContextK: Int {
-        if isLocal { return 32 }
-        if apiProtocol == .anthropic { return 200 }
-        if secretAccount.lowercased().hasSuffix("deepseek.com") { return 256 }
-        return 128
-    }
+    /// The context length assumed unless the user sets one, in thousands of tokens: 256 for
+    /// cloud models, 32 for models on this Mac.
+    public var estimatedContextK: Int { isLocal ? 32 : 256 }
 
     public var contextBudget: ContextBudget { ContextBudget(contextTokens: contextTokens) }
 }

@@ -96,14 +96,25 @@ public struct ProviderPreset: Identifiable, Sendable {
         .init(name: "本地 Ollama",
               configuration: .init(apiProtocol: .openAICompatible, baseURL: "http://127.0.0.1:11434/v1", model: "qwen3:30b-a3b",
                                    reasoning: false)),
-        .init(name: "Claude",
-              configuration: .init(apiProtocol: .anthropic, baseURL: "https://api.anthropic.com", model: "claude-opus-5-5")),
         .init(name: "DeepSeek",
               configuration: .init(apiProtocol: .openAICompatible, baseURL: "https://api.deepseek.com", model: "deepseek-flash")),
         .init(name: "通义千问",
               configuration: .init(apiProtocol: .openAICompatible,
                                    baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus")),
+        .init(name: "Kimi",
+              configuration: .init(apiProtocol: .openAICompatible, baseURL: "https://api.moonshot.cn/v1", model: "kimi-k2.6")),
+        .init(name: "智谱 GLM",
+              configuration: .init(apiProtocol: .openAICompatible, baseURL: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3")),
+        .init(name: "OpenAI",
+              configuration: .init(apiProtocol: .openAICompatible, baseURL: "https://api.openai.com/v1", model: "gpt-6-sol")),
+        .init(name: "Claude",
+              configuration: .init(apiProtocol: .anthropic, baseURL: "https://api.anthropic.com", model: "claude-opus-5-5")),
+        .init(name: "Grok",
+              configuration: .init(apiProtocol: .openAICompatible, baseURL: "https://api.x.ai/v1", model: "grok-4.7")),
     ]
 
+    /// Local Ollama: nothing leaves the Mac until the user picks otherwise.
     public static let `default` = all[0]
+
+    public static func named(_ name: String) -> ProviderPreset? { all.first { $0.name == name } }
 }

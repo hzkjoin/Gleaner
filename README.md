@@ -52,7 +52,7 @@
 
 **模型**
 
-支持 OpenAI 兼容协议（本地 Ollama、DeepSeek、通义千问、OpenAI 等）和 Anthropic 协议（Claude），接口地址、模型和 Key 都可以自己配置。
+支持 OpenAI 兼容协议（本地 Ollama、DeepSeek、通义千问、Kimi、智谱 GLM、OpenAI、Grok 等）和 Anthropic 协议（Claude），接口地址、模型和 Key 都可以自己配置。
 
 ## 安装
 
@@ -68,14 +68,18 @@
 
 点菜单栏的 🌾，再点右上角的齿轮。
 
-**模型**：选一个预设，填上 API Key，点「测试连接」。「上下文长度」留空时按模型估算（DeepSeek 256K，Claude 200K，本地模型 32K，其他 128K），也可以按服务商的说明自己填，它决定一次提问能带多少文件内容。
+**模型**：选一个预设，填上 API Key，点「测试连接」。「上下文长度」留空时，云端模型按 256K、本地模型按 32K 计算，也可以按服务商的说明自己填，它决定一次提问能带多少文件内容。
 
 | 预设 | 协议 | 接口地址 | 默认模型 |
 |---|---|---|---|
 | 本地 Ollama | OpenAI 兼容 | `http://127.0.0.1:11434/v1` | `qwen3:30b-a3b` |
 | DeepSeek | OpenAI 兼容 | `https://api.deepseek.com` | `deepseek-flash` |
 | 通义千问 | OpenAI 兼容 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| Kimi | OpenAI 兼容 | `https://api.moonshot.cn/v1` | `kimi-k2.6` |
+| 智谱 GLM | OpenAI 兼容 | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` |
+| OpenAI | OpenAI 兼容 | `https://api.openai.com/v1` | `gpt-6-sol` |
 | Claude | Anthropic | `https://api.anthropic.com` | `claude-opus-5-5` |
+| Grok | OpenAI 兼容 | `https://api.x.ai/v1` | `grok-4.7` |
 
 想让通知内容完全不离开本机，可以用 [Ollama](https://ollama.com) 在本地运行模型，例如 `ollama pull qwen3:30b-a3b`（约 18 GB，建议 32 GB 以上内存）。
 

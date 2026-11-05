@@ -374,6 +374,7 @@ struct SettingsView: View {
             }
             TextField("接口地址", text: $draft.provider.baseURL, prompt: Text("https://api.example.com/v1"))
             TextField("模型", text: $draft.provider.model, prompt: Text("模型名称"))
+            apiKeyRow
             LabeledContent("上下文长度") {
                 HStack(spacing: 4) {
                     TextField("", text: Binding(
@@ -385,7 +386,6 @@ struct SettingsView: View {
                     Text("K").foregroundStyle(Theme.textSecondary)
                 }
             }
-            apiKeyRow
             if draft.provider.apiProtocol == .openAICompatible && draft.provider.isLocal {
                 Toggle(isOn: $draft.provider.reasoning) {
                     Text("深度思考")
