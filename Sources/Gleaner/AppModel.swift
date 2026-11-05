@@ -414,8 +414,29 @@ final class AppModel: ObservableObject {
 
     // MARK: - Opening items
 
-    /// Opens where the item came from: the message itself for mail, otherwise the app.
+    /// The WeChat chat to open for an item, when finding chats is on and possible. Logs why not
+    /// for WeChat items.
+    func weChatChat(for item: ActionItem) -> String? {
+        guard WeChatLocator.handles(item.appID) else { return nil }
+        let name = item.attachmentPath.flatMap { origin(ofFile: $0)?.conversation } ?? item.sourceTitle
+        let reason: String? = !settings.locateWeChatChats ? "turned off"
+            : !WeChatLocator.isInstalled ? "WeChat for Mac not installed"
+            : !WeChatLocator.isTrusted ? "no Accessibility access"
+            : name.isEmpty ? "item has no chat name" : nil
+        if let reason {
+            log.info("Not locating the WeChat chat: \(reason, privacy: .public)")
+            return nil
+        }
+        return name
+    }
+
+    /// Opens where the item came from: the message itself for mail, the chat for WeChat,
+    /// otherwise the app.
     func open(_ item: ActionItem) {
+        if let chat = weChatChat(for: item) {
+            Task { await WeChatLocator.open(conversation: chat) }
+            return
+        }
         guard item.appID.lowercased() == MailSource.appID,
               let rowID = item.sourceIDs.compactMap(MailSource.rowID(fromNotificationID:)).max() else {
             AppDirectory.shared.open(item.appID)

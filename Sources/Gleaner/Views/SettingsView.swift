@@ -10,6 +10,7 @@ struct SettingsView: View {
 
     @State private var draft = AppSettings()
     @State private var finderMenuEnabled = FIFinderSyncController.isExtensionEnabled
+    @State private var accessibilityTrusted = WeChatLocator.isTrusted
     @State private var apiKey = ""
     @State private var searchKeys: [WebSearchChannel: String] = [:]
     @State private var editingSearchKey: Set<WebSearchChannel> = []
@@ -148,6 +149,22 @@ struct SettingsView: View {
             Toggle("自动复制验证码", isOn: $draft.autoCopyCodes)
             Toggle("建议回复", isOn: $draft.suggestReplies)
             Toggle("日程建议", isOn: $draft.scheduleSuggestions)
+            if WeChatLocator.isInstalled {
+                Toggle(isOn: Binding(
+                    get: { draft.locateWeChatChats },
+                    set: { enabled in
+                        draft.locateWeChatChats = enabled
+                        if enabled && !WeChatLocator.isTrusted { WeChatLocator.requestTrust() }
+                    }
+                )) {
+                    Text("打开到微信会话")
+                    if draft.locateWeChatChats && !accessibilityTrusted { Text("需要辅助功能权限") }
+                }
+                if draft.locateWeChatChats && !accessibilityTrusted {
+                    Button("授权") { WeChatLocator.requestTrust() }
+                        .buttonStyle(PillButtonStyle())
+                }
+            }
             LabeledContent("访达右键「问问拾穗」") {
                 if finderMenuEnabled {
                     Text("已开启").foregroundStyle(Theme.textTertiary)
@@ -158,9 +175,10 @@ struct SettingsView: View {
             }
         }
         .task {
-            // The extension is turned on in System Settings; notice it while this page is open.
+            // These are turned on in System Settings; notice it while this page is open.
             while !Task.isCancelled {
                 finderMenuEnabled = FIFinderSyncController.isExtensionEnabled
+                accessibilityTrusted = WeChatLocator.isTrusted
                 try? await Task.sleep(for: .seconds(1))
             }
         }

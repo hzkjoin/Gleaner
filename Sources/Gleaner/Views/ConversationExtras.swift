@@ -26,11 +26,17 @@ struct ReplyBox: View {
         .onAppear { draft = item.suggestedReply }
     }
 
-    /// Copies the reply and brings the app forward, ready to paste.
+    /// Copies the reply and brings the app forward, ready to paste. For WeChat, opens the chat
+    /// and pastes the reply into it, unsent.
     private func copyAndOpen() {
         Clipboard.copy(draft)
-        AppDirectory.shared.open(item.appID)
         PanelDismissal.dismiss()
+        if let chat = model.weChatChat(for: item) {
+            let reply = draft
+            Task { await WeChatLocator.open(conversation: chat, reply: reply) }
+        } else {
+            AppDirectory.shared.open(item.appID)
+        }
     }
 }
 

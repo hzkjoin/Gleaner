@@ -33,6 +33,8 @@ struct AppSettings: Codable, Equatable {
     var readWeChatFiles: Bool = true
     /// During a Focus, the menu bar only shows codes, imminent events and urgent items.
     var quietDuringFocus: Bool = true
+    /// Open the exact WeChat chat for an item, by searching for it (needs Accessibility access).
+    var locateWeChatChats: Bool = true
     /// Draft a reply for messages from people.
     var suggestReplies: Bool = true
     /// Let the assistant search the web when the provider offers it.
@@ -77,7 +79,7 @@ struct AppSettings: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case provider, userNames, ignoredApps, showTopItemInMenuBar, collectNews, autoCopyCodes,
              mutedConversations, irrelevantExamples, launchAtLoginConfigured, showCalendar, briefings,
-             readMessages, readWeChatFiles, quietDuringFocus, suggestReplies, rules, launchAtLogin, webSearch, searchChannel, readMail, scheduleSuggestions
+             readMessages, readWeChatFiles, quietDuringFocus, suggestReplies, rules, launchAtLogin, webSearch, searchChannel, readMail, scheduleSuggestions, locateWeChatChats
     }
 
     /// Settings saved by older versions lack newer keys; keep what is there, default the rest.
@@ -105,6 +107,7 @@ struct AppSettings: Codable, Equatable {
         searchChannel = (try? c.decodeIfPresent(WebSearchChannel.self, forKey: .searchChannel)) ?? defaults.searchChannel
         readMail = try c.decodeIfPresent(Bool.self, forKey: .readMail) ?? defaults.readMail
         scheduleSuggestions = try c.decodeIfPresent(Bool.self, forKey: .scheduleSuggestions) ?? defaults.scheduleSuggestions
+        locateWeChatChats = try c.decodeIfPresent(Bool.self, forKey: .locateWeChatChats) ?? defaults.locateWeChatChats
     }
 
     static func load(from defaults: UserDefaults = .standard) -> AppSettings {
