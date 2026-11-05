@@ -55,6 +55,9 @@ public struct AnthropicProvider: LLMProvider {
         ]
 
         if isOfficial {
+            // The system prompt is the stable part (instructions, a conversation's context); mark it
+            // for caching so repeated requests read it from the cache.
+            body["system"] = [["type": "text", "text": request.system, "cache_control": ["type": "ephemeral"]]]
             // Classification is simple; low effort keeps latency and cost down.
             var outputConfig: [String: Any] = ["effort": "low"]
             if let schemaText = request.jsonSchema, let schema = HTTPSupport.jsonObject(schemaText) {

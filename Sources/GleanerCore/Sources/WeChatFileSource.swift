@@ -28,6 +28,16 @@ public struct WeChatFileSource: NotificationSource {
         }.filter { fm.fileExists(atPath: $0.path) }
     }
 
+    /// A received file by name, from the last two months, newest first; nil when not found.
+    public func locate(fileNamed name: String, now: Date = Date()) -> URL? {
+        let fm = FileManager.default
+        for folder in monthFolders(now: now).reversed() {
+            let file = folder.appendingPathComponent(name)
+            if fm.fileExists(atPath: file.path) { return file }
+        }
+        return nil
+    }
+
     public func changeToken() -> Date? {
         monthFolders().compactMap {
             (try? FileManager.default.attributesOfItem(atPath: $0.path))?[.modificationDate] as? Date

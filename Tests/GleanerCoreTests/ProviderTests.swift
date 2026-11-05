@@ -119,7 +119,10 @@ struct AnthropicProviderTests {
         #expect(sent.headers["anthropic-version"] == AnthropicProvider.officialAPIVersion)
         #expect(sent.headers["anthropic-beta"] == "server-side-fallback-2026-07-01")
         #expect(sent.body["fallbacks"] as? String == "default")
-        #expect(sent.body["system"] as? String == "sys")
+        // The system prompt is marked for prompt caching.
+        let system = sent.body["system"] as? [[String: Any]]
+        #expect(system?.first?["text"] as? String == "sys")
+        #expect((system?.first?["cache_control"] as? [String: String])?["type"] == "ephemeral")
         let output = try #require(sent.body["output_config"] as? [String: Any])
         #expect(output["effort"] as? String == "low")
         let format = try #require(output["format"] as? [String: Any])

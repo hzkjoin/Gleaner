@@ -21,15 +21,24 @@ struct PanelView: View {
                 VStack(spacing: 0) {
                     header
                     if showsTabs {
-                        SegmentedTabs(selection: $tab, tabs: [
-                            (.items, "待处理", model.actionableItems.count),
-                            (.news, "热点", model.news.count),
-                        ])
-                            .padding(.horizontal, Theme.horizontalPadding)
-                            .padding(.bottom, 10)
+                        HStack {
+                            SegmentedTabs(selection: $tab, tabs: [
+                                (.items, "待处理", model.actionableItems.count),
+                                (.news, "热点", model.news.count),
+                            ])
+                            Spacer()
+                            if tab == .news && !model.news.isEmpty {
+                                Button("清空") { model.clearNews() }
+                                    .buttonStyle(.plain)
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(Theme.textTertiary)
+                            }
+                        }
+                        .padding(.horizontal, Theme.horizontalPadding)
+                        .padding(.bottom, 10)
                     }
                     content
-                    footer
+                        .padding(.bottom, 4)
                 }
             }
         }
@@ -59,6 +68,7 @@ struct PanelView: View {
             AskButton { model.startNewChat() }
             HStack(spacing: 0) {
                 IconButton(symbol: "arrow.clockwise", help: "立即检查") { model.checkNow() }
+                IconButton(symbol: "clock.arrow.circlepath", help: "历史") { model.route = .history }
                 IconButton(symbol: "gearshape", help: "设置") { model.route = .settings }
             }
         }
@@ -136,47 +146,15 @@ struct PanelView: View {
         }
     }
 
-    // MARK: - Footer
-
-    private var footer: some View {
-        VStack(spacing: 0) {
-            Rectangle().fill(Theme.divider).frame(height: 0.5)
-            HStack(spacing: 5) {
-                Image(systemName: model.settings.provider.isLocal ? "lock.fill" : "cloud")
-                    .font(.system(size: 9))
-                Text(model.settings.provider.model).lineLimit(1)
-                Text("今日 \(model.analyzedToday) 条").lineLimit(1).padding(.leading, 6)
-                Spacer()
-                if showsTabs && tab == .news {
-                    if !model.news.isEmpty {
-                        Button("清空热点") { model.clearNews() }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Theme.textSecondary)
-                            .padding(.trailing, 2)
-                    }
-                } else if !model.visibleItems.isEmpty {
-                    Button("全部完成") { model.completeAll() }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Theme.textSecondary)
-                        .padding(.trailing, 2)
-                }
-                IconButton(symbol: "clock.arrow.circlepath", help: "历史") { model.route = .history }
-                IconButton(symbol: "power", help: "退出") { NSApplication.shared.terminate(nil) }
-            }
-            .font(.system(size: 11))
-            .foregroundStyle(Theme.textTertiary)
-            .padding(.leading, Theme.horizontalPadding)
-            .padding(.trailing, 10)
-            .padding(.vertical, 5)
-        }
-    }
 }
 
 // MARK: - Pieces
 
 private struct SectionView: View {
+    @EnvironmentObject private var model: AppModel
     let kind: ActionKind
     let groups: [[ActionItem]]
+    @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -186,9 +164,19 @@ private struct SectionView: View {
                 Text("\(groups.reduce(0) { $0 + $1.count })")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Theme.textTertiary)
+                Spacer()
+                // Completes this section only; shown on hover so it isn't hit by accident.
+                Button("全部完成") { groups.joined().forEach(model.complete) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.textTertiary)
+                    .opacity(hovering ? 1 : 0)
             }
             .foregroundStyle(Theme.textSecondary)
             .padding(.leading, 4)
+            .padding(.trailing, 4)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
 
             ForEach(groups, id: \.first?.id) { group in
                 if group.count > 1 {

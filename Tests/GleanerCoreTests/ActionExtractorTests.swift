@@ -159,6 +159,8 @@ struct VerificationCodeDetectorTests {
         ("【银行】尾号1234的账户，动态码 559201，请勿泄露", "559201"),
         ("Your verification code is 7731.", "7731"),
         ("校验码：AB12CD", "AB12CD"),
+        ("Your OTP: 908172. Do not share it.", "908172"),
+        ("Ant Bank 登录验证码\n你的一次性验证码是 2325，10 分钟内有效", "2325"),
     ])
     func finds(text: String, expected: String) {
         #expect(VerificationCodeDetector.code(in: text) == expected)
@@ -168,6 +170,13 @@ struct VerificationCodeDetectorTests {
         "订单 20261104 已发货",
         "会议改到 1530 开始",
         "请输入验证码",
+        // A statement email: the number comes before the security footer that mentions OTP.
+        "你的投资账户电子月结单已准备好。客服热线 2325 8888。" + String(repeating: "说明文字。", count: 20)
+            + "We will never ask for your one-time password.",
+        // The keyword far from any number.
+        "验证码相关说明。" + String(repeating: "很长的正文。", count: 20) + "合同编号 A1234。",
+        // Not the keyword "OTP".
+        "Hotpot night 1234 tickets",
     ])
     func ignores(text: String) {
         #expect(VerificationCodeDetector.code(in: text) == nil)
@@ -207,5 +216,121 @@ struct VerificationCodeDetectorTests {
                                     sourceExcerpt: "【某某云】您的验证码为 482913", notificationDate: date)]
         let merged = ActionExtractor.merge(fromModel, detectedCodes: detected)
         #expect(merged.map(\.summary) == ["验证码 482913（某某云）"])
+    }
+}
+
+@Suite struct CodeSplitTests {
+    let date = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @Test func ruleHandlesShortMessagesAndLeavesMailToTheModel() {
+        let sms = note("1", app: "com.apple.MobileSMS", title: "106900", body: "【某某云】您的验证码为 482913", at: date)
+        #expect(VerificationCodeDetector.item(for: sms)?.verificationCode == "482913")
+        let mail = note("2", app: "com.apple.mail", title: "某某云", body: "您的验证码为 482913", at: date)
+        #expect(VerificationCodeDetector.item(for: mail) == nil)
+        let long = note("3", app: "com.example", title: "x", body: "验证码 482913 " + String(repeating: "很长的说明。", count: 60), at: date)
+        #expect(VerificationCodeDetector.item(for: long) == nil)
+        var flagged = long
+        flagged = AppNotification(id: "4", appID: "com.example", title: "x", body: flagged.body, date: date, isOneTimePasscode: true)
+        #expect(VerificationCodeDetector.item(for: flagged)?.verificationCode == "482913")
+    }
+
+    @Test func modelCodesMustAppearInTheMessage() async throws {
+        let mail = note("m", app: "com.apple.mail", title: "Ant Bank", body: "你的一次性验证码是 2325，10 分钟内有效。客服 8888 6666", at: date)
+        let statement = note("s", app: "com.apple.mail", title: "Ant Bank", body: "你的月结单已准备好", at: date)
+        let output = #"{"actions":[{"sources":[1],"summary":"验证码 2325（Ant Bank）","due":"","priority":"high","kind":"code"},{"sources":[2],"summary":"验证码 7319（Ant Bank）","due":"","priority":"high","kind":"code"}]}"#
+        let items = try await ActionExtractor(provider: StubProvider([.success(output)])).extract(from: [mail, statement])
+        let real = try #require(items.first { $0.sourceIDs == ["m"] })
+        #expect(real.kind == .code && real.verificationCode == "2325")
+        // The model made up a number the message doesn't contain: not shown as a code.
+        let invented = try #require(items.first { $0.sourceIDs == ["s"] })
+        #expect(invented.kind == .notice)
+    }
+}
+
+@Suite struct SourceMessagesTests {
+    let date = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @Test func itemsKeepTheirMessagesInOrder() async throws {
+        let early = note("1", app: "com.tencent.xinwechat", title: "资料群", body: "赵六: 这张表口径不一样", at: date)
+        let late = note("2", app: "com.tencent.xinwechat", title: "资料群", body: "小王: 那我重新算吧", at: date.addingTimeInterval(60))
+        let output = #"{"actions":[{"sources":[2,1],"summary":"小王将重新计算","due":"","priority":"low","kind":"notice"}]}"#
+        let item = try #require(try await ActionExtractor(provider: StubProvider([.success(output)])).extract(from: [early, late]).first)
+        #expect(item.messages == ["赵六: 这张表口径不一样", "小王: 那我重新算吧"])
+    }
+
+    @Test func mergingAppendsMessagesAndOldItemsSplitTheirExcerpt() {
+        var older = ActionItem(summary: "a", appID: "x", sourceTitle: "群", sourceExcerpt: "甲: 一 / 乙: 二", notificationDate: date)
+        #expect(older.messages == ["甲: 一", "乙: 二"])
+        var newer = ActionItem(summary: "b", appID: "x", sourceTitle: "群", sourceExcerpt: "丙: 三", notificationDate: date)
+        newer.sourceMessages = ["丙: 三"]
+        older.absorb(newer)
+        #expect(older.messages == ["甲: 一", "乙: 二", "丙: 三"])
+    }
+}
+
+@Suite struct MergedFilesTests {
+    let date = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @Test func mergingKeepsFilesAndDropsTheirNameLines() {
+        var notice = ActionItem(summary: "小王将重新计算", kind: .notice, appID: "x", sourceTitle: "资料群",
+                                sourceExcerpt: "", notificationDate: date)
+        notice.sourceMessages = ["赵六: 这张表口径不一样", "赵六: [文件] 估值分位.xlsx", "赵六: [图片]"]
+        let file = ActionItem(summary: "收到文件 估值分位.xlsx", kind: .notice, appID: "x", sourceTitle: "资料群",
+                              sourceExcerpt: "估值分位.xlsx", notificationDate: date, attachmentPath: "/tmp/估值分位.xlsx")
+        notice.absorb(file)
+        #expect(notice.files == ["/tmp/估值分位.xlsx"])
+        #expect(notice.textMessages == ["赵六: 这张表口径不一样", "赵六: [图片]"])
+        // A file item on its own shows just its box.
+        #expect(file.textMessages.isEmpty)
+    }
+}
+
+@Suite struct MentionedFilesTests {
+    @Test func findsSentFileNames() {
+        var item = ActionItem(summary: "s", appID: "com.tencent.xinwechat", sourceTitle: "群", sourceExcerpt: "",
+                              notificationDate: Date())
+        item.sourceMessages = ["赵六: [文件] 估值分位.xlsx", "赵六: [图片]", "王五: 收到"]
+        #expect(item.mentionedFiles == ["估值分位.xlsx"])
+        #expect(item.textMessages(files: ["/x/估值分位.xlsx"]) == ["赵六: [图片]", "王五: 收到"])
+    }
+
+    @Test func locatesReceivedFiles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("wx-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM"
+        let folder = root.appendingPathComponent("wxid_a/msg/file/\(formatter.string(from: Date()))")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: folder.appendingPathComponent("估值分位.xlsx"))
+        let source = WeChatFileSource(root: root)
+        #expect(source.locate(fileNamed: "估值分位.xlsx")?.lastPathComponent == "估值分位.xlsx")
+        #expect(source.locate(fileNamed: "不存在.docx") == nil)
+    }
+}
+
+@Suite struct SourceEntriesTests {
+    private func item(_ messages: [String]) -> ActionItem {
+        var item = ActionItem(summary: "s", appID: "com.tencent.xinwechat", sourceTitle: "群", sourceExcerpt: "",
+                              notificationDate: Date())
+        item.sourceMessages = messages
+        return item
+    }
+
+    @Test func filesSitWhereTheyWereSent() {
+        let entries = item(["赵六: 先看这个", "估值分位.xlsx", "赵六: [文件] 估值分位.xlsx", "赵六: [图片]", "小王: 那我重新算吧"])
+            .sourceEntries(files: ["/f/估值分位.xlsx"])
+        #expect(entries == [
+            .text("赵六: 先看这个"),
+            .file(sender: "赵六", path: "/f/估值分位.xlsx"),
+            .text("赵六: [图片]"),
+            .text("小王: 那我重新算吧"),
+        ])
+    }
+
+    @Test func bareFileLinesAndUnmentionedFiles() {
+        let entries = item(["报价单.pdf", "王五: 收到"]).sourceEntries(files: ["/f/报价单.pdf", "/f/附件.docx"])
+        #expect(entries == [.file(sender: nil, path: "/f/报价单.pdf"), .text("王五: 收到"), .file(sender: nil, path: "/f/附件.docx")])
+        // A "[文件]" message whose file isn't on disk stays as text.
+        #expect(item(["赵六: [文件] 不在了.xlsx"]).sourceEntries(files: []) == [.text("赵六: [文件] 不在了.xlsx")])
     }
 }

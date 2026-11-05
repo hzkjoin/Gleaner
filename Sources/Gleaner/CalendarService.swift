@@ -36,6 +36,36 @@ final class CalendarService {
         return items
     }
 
+    /// Adds a confirmed suggestion to Calendar or Reminders. Returns whether it was saved.
+    func add(_ suggestion: ScheduleSuggestion, source: String) async -> Bool {
+        let notes = [suggestion.notes, source].filter { !$0.isEmpty }.joined(separator: "\n")
+        switch suggestion.kind {
+        case .reminder:
+            return await addReminder(title: suggestion.title, notes: notes,
+                                     due: DueDateParser.Due(date: suggestion.start, hasTime: !suggestion.allDay))
+        case .event:
+            var granted = Self.canReadEvents
+            if !granted { granted = (try? await store.requestFullAccessToEvents()) ?? false }
+            guard granted, let calendar = store.defaultCalendarForNewEvents else { return false }
+            let event = EKEvent(eventStore: store)
+            event.calendar = calendar
+            event.title = suggestion.title
+            event.notes = notes.isEmpty ? nil : notes
+            event.location = suggestion.location.isEmpty ? nil : suggestion.location
+            event.isAllDay = suggestion.allDay
+            event.startDate = suggestion.start
+            event.endDate = suggestion.allDay ? suggestion.start : suggestion.effectiveEnd
+            if !suggestion.allDay { event.addAlarm(EKAlarm(relativeOffset: -15 * 60)) }
+            do {
+                try store.save(event, span: .thisEvent, commit: true)
+                return true
+            } catch {
+                log.error("Adding event failed: \(error.localizedDescription, privacy: .public)")
+                return false
+            }
+        }
+    }
+
     /// Adds a reminder, with an alert at `due` when the time is known. Returns whether it was saved.
     func addReminder(title: String, notes: String, due: DueDateParser.Due?) async -> Bool {
         var granted = Self.canReadReminders

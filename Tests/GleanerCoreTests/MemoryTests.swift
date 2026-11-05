@@ -189,3 +189,19 @@ struct ContextReplyTests {
         #expect(Assistant.earlierNote([], appName: { $0 }).isEmpty)
     }
 }
+
+@Suite struct FileOriginTests {
+    @Test func findsWhoSentAFile() {
+        let archive = ConversationArchive(store: nil)
+        archive.add([
+            ArchivedMessage(id: "1", appID: "com.tencent.xinwechat", title: "学习群", body: "赵六: [文件] 第二课 风险测评.pdf", date: Date()),
+            ArchivedMessage(id: "2", appID: "com.tencent.xinwechat", title: "王总", body: "[文件] 报价单.xlsx", date: Date()),
+            // The file's own record has no chat and must not count as its origin.
+            ArchivedMessage(id: "3", appID: "com.tencent.xinwechat", title: "", body: "[文件] 合同.docx", date: Date()),
+        ])
+        #expect(archive.origin(ofFileNamed: "合同.docx") == nil)
+        #expect(archive.origin(ofFileNamed: "第二课 风险测评.pdf").map { "\($0.conversation)|\($0.sender ?? "-")" } == "学习群|赵六")
+        #expect(archive.origin(ofFileNamed: "报价单.xlsx").map { "\($0.conversation)|\($0.sender ?? "-")" } == "王总|-")
+        #expect(archive.origin(ofFileNamed: "没有.docx") == nil)
+    }
+}

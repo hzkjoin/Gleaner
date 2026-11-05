@@ -28,7 +28,8 @@ final class MenuBarController: NSObject {
 
         if let button = statusItem.button {
             button.target = self
-            button.action = #selector(toggle)
+            button.action = #selector(clicked)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         updateTitle()
         // Coalesce bursts of model changes into one title update.
@@ -37,6 +38,11 @@ final class MenuBarController: NSObject {
             .sink { [weak self] _ in self?.updateTitle() }
             .store(in: &cancellables)
         PanelDismissal.handler = { [weak self] in self?.close() }
+        PanelDismissal.refocus = { [weak self] in
+            guard let self, self.isOpen else { return }
+            NSApp.activate()
+            self.panel.makeKeyAndOrderFront(nil)
+        }
     }
 
     var isOpen: Bool { panel.isVisible }
@@ -47,8 +53,30 @@ final class MenuBarController: NSObject {
         return window.convertToScreen(button.convert(button.bounds, to: nil))
     }
 
-    @objc private func toggle() {
-        isOpen ? close() : open()
+    @objc private func clicked() {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showMenu()
+        } else {
+            isOpen ? close() : open()
+        }
+    }
+
+    /// Right-click: the few things that don't need the panel.
+    private func showMenu() {
+        close()
+        let menu = NSMenu()
+        let settings = NSMenuItem(title: "设置", action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "退出拾穗", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        guard let button = statusItem.button else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+    }
+
+    @objc private func openSettings() {
+        model.route = .settings
+        open()
     }
 
     func open() {
@@ -81,7 +109,7 @@ final class MenuBarController: NSObject {
             MainActor.assumeIsolated {
                 // The menu bar item is drawn by the system, so clicks on it arrive here too;
                 // those are handled by `toggle`.
-                guard let self, !self.itemFrame.contains(NSEvent.mouseLocation) else { return }
+                guard let self, !self.itemFrame.contains(NSEvent.mouseLocation), !PanelDismissal.isPickingFiles else { return }
                 self.close()
             }
         }) {
@@ -99,7 +127,10 @@ final class MenuBarController: NSObject {
         ) { [weak self] note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             guard app?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
-            MainActor.assumeIsolated { self?.close() }
+            MainActor.assumeIsolated {
+                guard !PanelDismissal.isPickingFiles else { return }
+                self?.close()
+            }
         })
     }
 

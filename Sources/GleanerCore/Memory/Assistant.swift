@@ -38,33 +38,101 @@ public struct Assistant: Sendable {
         """
     }
 
+    /// Material a question is about, already read into text.
+    public struct Attachment: Sendable, Equatable {
+        public var title: String
+        public var text: String
+        /// Only the beginning of a long file is included.
+        public var truncated: Bool
+
+        public init(title: String, text: String, truncated: Bool = false) {
+            self.title = title
+            self.text = text
+            self.truncated = truncated
+        }
+    }
+
+    /// Key points of a received file.
+    public func summarizeFile(named name: String, content: FileTextExtractor.Content) -> AsyncThrowingStream<String, Error> {
+        provider.stream(fileSummaryRequest(named: name, content: content))
+    }
+
+    func fileSummaryRequest(named name: String, content: FileTextExtractor.Content) -> CompletionRequest {
+        let system = """
+        总结用户收到的文件，让用户快速知道它讲了什么、要不要处理。用户的称呼：\(names)。
+        - 3 到 5 行，每行一句，以"- "开头
+        - 先说这是什么文件，再写关键数字、日期和结论
+        - 有需要用户做的事（填写、回复、审批、截止时间），单独一行写清楚
+        - 不要开场白，不要使用"·"符号
+        """
+        let note = content.truncated ? "（文件较长，以下只是前面部分）\n" : ""
+        return CompletionRequest(system: system, user: "文件名：\(name)\n\(note)\n\(content.text)")
+    }
+
+    static func attachmentNote(_ attachments: [Attachment]) -> String {
+        guard !attachments.isEmpty else { return "" }
+        let blocks = attachments.map { attachment in
+            let note = attachment.truncated ? "（较长，只提供了前面部分）" : ""
+            return "【\(attachment.title)】\(note)\n\(attachment.text)"
+        }.joined(separator: "\n\n")
+        return "\n\n用户就下面的内容提问，回答以它为准：\n" + blocks
+    }
+
     public enum Event: Sendable, Equatable {
         /// A web search started, with its query.
         case searching(String)
         case text(String)
+        /// Prompt tokens of a request and how many came from the provider's cache.
+        case usage(PromptUsage)
     }
 
-    /// How many earlier turns are sent back with a follow-up question.
-    public static let historyTurns = 6
+    /// How many earlier turns are sent back with a follow-up question. Generous on purpose:
+    /// dropping the oldest turn changes the start of the request and loses the prompt cache.
+    public static let historyTurns = 30
     /// Rounds of tool use before the model must answer.
     static let maxSearchRounds = 2
 
-    /// Answers a question in a conversation, from the messages and open items. The model may search
-    /// the web through `search`, or by itself when `nativeSearch` (the provider was made with search on).
-    public func converse(_ question: String, history: [ChatTurn], messages: [ArchivedMessage], openItems: [ActionItem],
-                         earlier: [ArchivedMessage] = [],
-                         search: WebSearchService?, nativeSearch: Bool = false, gaps: [String] = [], now: Date = Date(),
-                         appName: @escaping @Sendable (String) -> String) -> AsyncThrowingStream<Event, Error> {
-        let system = conversationSystem(messages: messages, openItems: openItems, canSearch: search != nil || nativeSearch,
-                                        now: now, appName: appName)
-            + Self.earlierNote(earlier, appName: appName) + Self.gapNote(gaps)
+    /// The fixed part of a conversation: instructions, open items and recent messages as of its
+    /// first question. Built once and reused, so every later request starts the same way.
+    public func conversationContext(messages: [ArchivedMessage], openItems: [ActionItem], news: [NewsItem] = [],
+                                    canSearch: Bool, gaps: [String] = [], now: Date = Date(),
+                                    appName: (String) -> String) -> String {
+        conversationSystem(messages: messages, openItems: openItems, news: news, canSearch: canSearch, now: now,
+                           appName: appName)
+            + Self.gapNote(gaps)
+    }
+
+    /// How many news headlines go into a conversation's context.
+    static let newsLimit = 40
+
+    /// What goes ahead of one question: its attachments, messages that arrived since the
+    /// conversation began, and older messages found for it.
+    public static func preamble(attachments: [Attachment], newMessages: [ArchivedMessage] = [],
+                                earlier: [ArchivedMessage] = [], appName: (String) -> String) -> String {
+        var parts: [String] = []
+        if !newMessages.isEmpty {
+            parts.append("刚收到的消息（旧→新）：\n" + ConversationArchive.transcript(newMessages, includeConversation: true, appName: appName))
+        }
+        let earlierText = earlierNote(earlier, appName: appName)
+        if !earlierText.isEmpty { parts.append(earlierText.trimmingCharacters(in: .newlines)) }
+        let attached = attachmentNote(attachments)
+        if !attached.isEmpty { parts.append(attached.trimmingCharacters(in: .newlines)) }
+        return parts.joined(separator: "\n\n")
+    }
+
+    /// Answers `turn` (its question and preamble) after `history`, starting from `context`.
+    /// Earlier turns are replayed exactly as first sent, so the request only grows at the end.
+    /// The model may search the web through `search`, or by itself when `nativeSearch`.
+    public func converse(_ turn: ChatTurn, history: [ChatTurn], context: String,
+                         search: WebSearchService?, nativeSearch: Bool = false) -> AsyncThrowingStream<Event, Error> {
         let earlier = history.filter { !$0.failed && !$0.answer.isEmpty }.suffix(Self.historyTurns)
+        let question = turn.question
 
         guard let tooling = provider as? ToolCallingProvider else {
             // Single-turn providers get the conversation so far as text.
-            let past = earlier.map { "用户：\($0.question)\n助理：\($0.answer)" }.joined(separator: "\n\n")
-            let user = past.isEmpty ? question : "之前的对话：\n\(past)\n\n现在的问题：\(question)"
-            let stream = provider.stream(CompletionRequest(system: system, user: user))
+            let past = earlier.map { "用户：\($0.message)\n助理：\($0.answer)" }.joined(separator: "\n\n")
+            let user = past.isEmpty ? turn.message : "之前的对话：\n\(past)\n\n现在：\(turn.message)"
+            let stream = provider.stream(CompletionRequest(system: context, user: user))
             return AsyncThrowingStream { continuation in
                 let task = Task {
                     do {
@@ -76,9 +144,9 @@ public struct Assistant: Sendable {
             }
         }
 
-        var opening: [ChatMessage] = [.system(system)]
-        for turn in earlier { opening += [.user(turn.question), .assistant(turn.answer)] }
-        opening.append(.user(question))
+        var opening: [ChatMessage] = [.system(context)]
+        for past in earlier { opening += [.user(past.message), .assistant(past.answer)] }
+        opening.append(.user(turn.message))
         let start = opening
         let tools = search == nil ? [] : [Self.webSearchTool]
 
@@ -101,6 +169,8 @@ public struct Assistant: Sendable {
                             case .text(let piece):
                                 text += piece
                                 continuation.yield(.text(piece))
+                            case .usage(let usage):
+                                continuation.yield(.usage(usage))
                             case .toolCalls(let requested, let thought):
                                 calls = requested
                                 reasoning = thought
@@ -144,16 +214,22 @@ public struct Assistant: Sendable {
         }.joined(separator: "\n\n")
     }
 
-    func conversationSystem(messages: [ArchivedMessage], openItems: [ActionItem], canSearch: Bool, now: Date,
-                            appName: (String) -> String) -> String {
+    func conversationSystem(messages: [ArchivedMessage], openItems: [ActionItem], news: [NewsItem] = [], canSearch: Bool,
+                            now: Date, appName: (String) -> String) -> String {
         let today = now.formatted(.dateTime.locale(Locale(identifier: "zh_CN")).year().month().day().weekday(.wide))
         let items = openItems.map { "- \($0.summary)（\(appName($0.appID))，\($0.sourceTitle)）" }.joined(separator: "\n")
+        let time = DateFormatter()
+        time.dateFormat = "MM-dd HH:mm"
+        let headlines = news.sorted { $0.date > $1.date }.prefix(Self.newsLimit).map {
+            "- \($0.headline)（\($0.category.displayName)，\(appName($0.appID))，\(time.string(from: $0.date))）"
+        }.joined(separator: "\n")
         let searchRule = canSearch
             ? "\n- 消息记录里没有、需要实时或外部信息时（新闻、行情、天气等），先联网搜索再回答，句末注明来源网站"
             : ""
         return """
         你是用户的助理。今天是\(today)。用户的称呼：\(names)。
         - 先根据下面的消息记录和待办回答；记录里找不到就直说\(searchRule)
+        - 问到热点、新闻、行情时，先用下面"热点"里已整理的内容，不够再补充
         - 简短直接，一般不超过 6 行；列举时每行以"- "开头，涉及消息时在句末用括号注明是谁、在哪个会话，如（微信，王总，11-05 09:30）
         - 不要使用"·"符号
         - 引用原话用「」，重点可用 **加粗**，不用标题和表格
@@ -163,6 +239,9 @@ public struct Assistant: Sendable {
 
         待办：
         \(items.isEmpty ? "无" : items)
+
+        热点（已整理，新→旧）：
+        \(headlines.isEmpty ? "无" : headlines)
 
         最近的消息（旧→新）：
         \(ConversationArchive.transcript(messages, includeConversation: true, appName: appName))

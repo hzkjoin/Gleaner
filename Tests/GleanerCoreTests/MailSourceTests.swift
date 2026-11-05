@@ -130,7 +130,9 @@ import Testing
         #expect(notes.first?.title == "某某云")
         #expect(notes.first?.subtitle == "登录验证码")
         #expect(notes.first?.body.contains("482913") == true)
-        #expect(VerificationCodeDetector.item(for: notes[0])?.verificationCode == "482913")
+        // Mail is left to the model; the text it reads holds the code.
+        #expect(VerificationCodeDetector.item(for: notes[0]) == nil)
+        #expect(VerificationCodeDetector.code(in: notes[0].body) == "482913")
     }
 
     @Test func lateMailIsDatedWhenFirstSeen() throws {
@@ -202,5 +204,44 @@ import Testing
         insert(index, rowID: 21, mailbox: 1, received: now.addingTimeInterval(-5))  // and one genuinely new message
         let fetched = try source.fetch(after: now.addingTimeInterval(-10))
         #expect(fetched.map(\.id) == ["mail-21"])
+    }
+}
+
+@Suite struct MailLinkTests {
+    @Test func buildsMessageLinks() {
+        #expect(MailSource.messageURL(messageID: "<abc.123@mail.example.com>")?.absoluteString
+                == "message://%3Cabc.123@mail.example.com%3E")
+        #expect(MailSource.messageURL(messageID: "<a b/c@x>")?.absoluteString == "message://%3Ca%20b%2Fc@x%3E")
+        #expect(MailSource.messageURL(messageID: "") == nil)
+        #expect(MailSource.rowID(fromNotificationID: "mail-15695") == 15695)
+        #expect(MailSource.rowID(fromNotificationID: "sms-1") == nil)
+    }
+
+    @Test func findsTheMessageIDInTheIndexOrTheFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mail-link-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let version = root.appendingPathComponent("V10")
+        try FileManager.default.createDirectory(at: version.appendingPathComponent("MailData"), withIntermediateDirectories: true)
+        var db: OpaquePointer?
+        sqlite3_open(version.appendingPathComponent("MailData/Envelope Index").path, &db)
+        sqlite3_exec(db, """
+            CREATE TABLE messages (ROWID INTEGER PRIMARY KEY, mailbox INTEGER, global_message_id INTEGER);
+            CREATE TABLE mailboxes (ROWID INTEGER PRIMARY KEY, url TEXT);
+            CREATE TABLE message_global_data (ROWID INTEGER PRIMARY KEY, message_id_header TEXT);
+            INSERT INTO mailboxes VALUES (1, 'imap://ACCT/INBOX');
+            INSERT INTO message_global_data VALUES (1, '<indexed@example.com>'), (2, NULL);
+            INSERT INTO messages VALUES (10, 1, 1), (2500, 1, 2);
+            """, nil, nil, nil)
+        sqlite3_close(db)
+        // Row 2500 has no header in the index; its file has one.
+        let messages = version.appendingPathComponent("ACCT/INBOX.mbox/STORE/Data/2/Messages")
+        try FileManager.default.createDirectory(at: messages, withIntermediateDirectories: true)
+        let mail = "Message-ID: <from-file@example.com>\nSubject: x\n\nbody\n"
+        try (Data("\(mail.utf8.count)\n".utf8) + Data(mail.utf8)).write(to: messages.appendingPathComponent("2500.emlx"))
+
+        let source = MailSource(directory: root)
+        #expect(source.messageURL(forRowID: 10)?.absoluteString == "message://%3Cindexed@example.com%3E")
+        #expect(source.messageURL(forRowID: 2500)?.absoluteString == "message://%3Cfrom-file@example.com%3E")
+        #expect(source.messageURL(forRowID: 99) == nil)
     }
 }

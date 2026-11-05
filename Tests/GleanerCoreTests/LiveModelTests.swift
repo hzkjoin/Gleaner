@@ -166,12 +166,13 @@ struct LiveConversationTests {
         var searches: [String] = []
         var answer = ""
         let start = Date()
-        for try await event in assistant.converse("今天上证指数收盘多少点？", history: [], messages: [], openItems: [],
-                                                  search: configuration.makeWebSearch(channel: .deepseek, channelKey: "", modelKey: LiveModel.apiKey),
-                                                  appName: { $0 }) {
+        let context = assistant.conversationContext(messages: [], openItems: [], canSearch: true, appName: { $0 })
+        for try await event in assistant.converse(ChatTurn(question: "今天上证指数收盘多少点？"), history: [], context: context,
+                                                  search: configuration.makeWebSearch(channel: .deepseek, channelKey: "", modelKey: LiveModel.apiKey)) {
             switch event {
             case .searching(let query): searches.append(query)
             case .text(let piece): answer += piece
+            case .usage: break
             }
         }
         print("Searches:", searches, "seconds:", Int(Date().timeIntervalSince(start)))
@@ -184,9 +185,9 @@ struct LiveConversationTests {
         let configuration = try #require(LiveModel.configuration)
         let assistant = Assistant(provider: configuration.makeProvider(apiKey: LiveModel.apiKey))
         var searches = 0
-        for try await event in assistant.converse("把“收到”翻译成英文", history: [], messages: [], openItems: [],
-                                                  search: configuration.makeWebSearch(channel: .deepseek, channelKey: "", modelKey: LiveModel.apiKey),
-                                                  appName: { $0 }) {
+        let context = assistant.conversationContext(messages: [], openItems: [], canSearch: true, appName: { $0 })
+        for try await event in assistant.converse(ChatTurn(question: "把“收到”翻译成英文"), history: [], context: context,
+                                                  search: configuration.makeWebSearch(channel: .deepseek, channelKey: "", modelKey: LiveModel.apiKey)) {
             if case .searching = event { searches += 1 }
         }
         #expect(searches == 0)
@@ -202,5 +203,118 @@ struct LiveMailSourceTests {
         let codes = notes.compactMap { VerificationCodeDetector.item(for: $0) }.count
         print("Mail: \(notes.count) inbox messages in 3 days, \(withBody.count) with body text, average \(notes.isEmpty ? 0 : notes.map(\.body.count).reduce(0, +) / notes.count) chars, \(codes) codes")
         #expect(!notes.isEmpty)
+    }
+}
+
+@Suite("Live file summary", .enabled(if: LiveModel.configuration != nil))
+struct LiveFileSummaryTests {
+    @Test func summarizesAReceivedFile() async throws {
+        let configuration = try #require(LiveModel.configuration)
+        let content = FileTextExtractor.Content(text: """
+        关于开展 2026 年第四季度资料报送工作的通知
+        各部门：
+        请于 11 月 20 日前通过系统提交第四季度经营数据，包括营业收入、回款金额、在途合同。
+        逾期未报送的部门将在月度会议上通报。
+        联系人：综合部 李明 010-12345678
+        """, truncated: false)
+        var text = ""
+        for try await piece in Assistant(provider: configuration.makeProvider(apiKey: LiveModel.apiKey), userNames: ["小明"])
+            .summarizeFile(named: "资料报送通知.docx", content: content) { text += piece }
+        let summary = Assistant.clean(text)
+        print("Summary:\n\(summary)")
+        #expect(summary.contains("11 月 20 日") || summary.contains("11月20日"))
+        #expect(!summary.contains("·"))
+    }
+}
+
+@Suite("Live prompt cache", .enabled(if: LiveModel.configuration?.apiProtocol == .openAICompatible))
+struct LivePromptCacheTests {
+    @Test func followUpsHitTheCache() async throws {
+        let configuration = try #require(LiveModel.configuration)
+        let assistant = Assistant(provider: configuration.makeProvider(apiKey: LiveModel.apiKey))
+        let messages = (0..<120).map { index in
+            ArchivedMessage(id: "\(index)", appID: "com.tencent.xinwechat", title: index % 2 == 0 ? "项目群" : "王总",
+                            body: "第 \(index) 条：关于第四季度报价和交付排期的讨论，涉及合同条款与回款节点。", date: Date())
+        }
+        let context = assistant.conversationContext(messages: messages, openItems: [], canSearch: false, appName: { _ in "微信" })
+
+        func ask(_ turn: ChatTurn, after history: [ChatTurn]) async throws -> (String, PromptUsage?) {
+            var answer = ""
+            var usage: PromptUsage?
+            for try await event in assistant.converse(turn, history: history, context: context, search: nil) {
+                if case .text(let piece) = event { answer += piece }
+                if case .usage(let value) = event { usage = value }
+            }
+            return (Assistant.clean(answer), usage)
+        }
+        var first = ChatTurn(question: "王总最近在讨论什么？一句话")
+        let (answer, usage1) = try await ask(first, after: [])
+        first.answer = answer
+        try await Task.sleep(for: .seconds(4))  // the cache is built shortly after a request
+        let (_, usage2) = try await ask(ChatTurn(question: "涉及哪些条款？一句话"), after: [first])
+        print("Turn 1: \(usage1.map { "\($0.promptTokens) prompt, \($0.cachedTokens) cached" } ?? "no usage")")
+        print("Turn 2: \(usage2.map { "\($0.promptTokens) prompt, \($0.cachedTokens) cached" } ?? "no usage")")
+        #expect((usage2?.cachedTokens ?? 0) > (usage2?.promptTokens ?? 0) / 2)
+    }
+}
+
+@Suite("Live schedule suggestions", .enabled(if: LiveModel.configuration != nil))
+struct LiveScheduleTests {
+    @Test func picksWhatIsWorthScheduling() async throws {
+        let configuration = try #require(LiveModel.configuration)
+        let now = Date()
+        func item(_ summary: String, due: String = "", excerpt: String, from: String) -> ActionItem {
+            ActionItem(summary: summary, due: due, kind: .task, appID: "com.tencent.xinwechat", sourceTitle: from,
+                       sourceExcerpt: excerpt, notificationDate: now)
+        }
+        let items = [
+            item("参加明天下午的项目评审", due: "明天 15:00", excerpt: "明天下午三点在 3 楼会议室评审方案，大概一个半小时", from: "项目群"),
+            item("提交第四季度报送数据", due: "11 月 20 日前", excerpt: "请于 11 月 20 日前通过系统提交第四季度经营数据", from: "综合部"),
+            item("看一下新方案", excerpt: "有空看下新方案，提提意见", from: "王总"),
+        ]
+        let result = try await ScheduleSuggester(provider: configuration.makeProvider(apiKey: LiveModel.apiKey),
+                                                 appName: { _ in "微信" }).suggest(for: items, now: now)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd HH:mm"
+        for (index, item) in items.enumerated() {
+            if let s = result[item.id] {
+                print("\(index + 1). \(s.kind.rawValue) \(s.title) \(formatter.string(from: s.start))–\(formatter.string(from: s.effectiveEnd)) allDay=\(s.allDay) 地点=\(s.location)")
+            } else {
+                print("\(index + 1). not worth")
+            }
+        }
+        #expect(result[items[0].id]?.kind == .event)
+        #expect(result[items[1].id] != nil)
+        #expect(result[items[2].id] == nil)
+    }
+}
+
+extension LiveMailSourceTests {
+    @Test func recentMailCanBeOpened() throws {
+        let notes = try MailSource().fetch(after: Date().addingTimeInterval(-3 * 86_400))
+        let source = MailSource()
+        let rows = notes.compactMap { MailSource.rowID(fromNotificationID: $0.id) }
+        let linked = rows.filter { source.messageURL(forRowID: $0) != nil }
+        let located = rows.filter { source.location(forRowID: $0) != nil }
+        print("Mail: \(linked.count) of \(rows.count) open by link; all located for scripting: \(located.count == rows.count)")
+        #expect(located.count == rows.count)
+    }
+}
+
+@Suite("Live mail codes", .enabled(if: LiveModel.configuration != nil))
+struct LiveMailCodeTests {
+    @Test func modelTellsCodesFromStatements() async throws {
+        let configuration = try #require(LiveModel.configuration)
+        let now = Date()
+        let code = AppNotification(id: "c", appID: "com.apple.mail", title: "示例银行", subtitle: "登录验证码",
+                                   body: "登录验证码\n你的一次性验证码是 583027，10 分钟内有效。如非本人操作请致电 2345 6789。", date: now)
+        let statement = AppNotification(id: "s", appID: "com.apple.mail", title: "示例银行", subtitle: "月结单已就绪",
+                                        body: "你的投资账户电子月结单已准备好，请登录 App 查看。客服热线 2325 8888。我们不会以任何方式向你索取一次性密码（OTP）。",
+                                        date: now)
+        let items = try await ActionExtractor(provider: configuration.makeProvider(apiKey: LiveModel.apiKey), userNames: ["小明"])
+            .extract(from: [code, statement])
+        for item in items { print("\(item.sourceIDs) \(item.kind.rawValue) code=\(item.verificationCode ?? "-") | \(item.summary)") }
+        #expect(items.first { $0.sourceIDs.contains("c") }?.verificationCode == "583027")
+        #expect(items.filter { $0.sourceIDs.contains("s") }.allSatisfy { $0.kind != .code })
     }
 }

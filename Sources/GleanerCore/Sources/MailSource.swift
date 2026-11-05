@@ -188,6 +188,90 @@ public final class MailSource: NotificationSource, @unchecked Sendable {
         return sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int64(stmt, 0) : 0
     }
 
+    // MARK: - Opening a message
+
+    /// The row behind a notification id such as "mail-15695".
+    public static func rowID(fromNotificationID id: String) -> Int64? {
+        id.hasPrefix("mail-") ? Int64(id.dropFirst(5)) : nil
+    }
+
+    /// A `message://` link that opens the message in Mail, from its Message-ID header.
+    public func messageURL(forRowID rowID: Int64) -> URL? {
+        guard let version = versionDirectory else { return nil }
+        let index = version.appendingPathComponent("MailData/Envelope Index")
+        guard let (header, mailbox) = Self.lookUp(rowID, in: index) else { return nil }
+        var messageID = header
+        if messageID.isEmpty {
+            // Not in the index: read it from the message file's headers.
+            let row = Row(rowID: rowID, sender: "", address: "", subject: "", summary: "", received: Date(), mailboxURL: mailbox)
+            if let file = Self.messageFile(for: row, in: version), let data = try? Data(contentsOf: file),
+               let newline = data.firstIndex(of: UInt8(ascii: "\n")),
+               let part = MailMessageText.Part(Data(data[data.index(after: newline)...])) {
+                messageID = part.headers["message-id"] ?? ""
+            }
+        }
+        return Self.messageURL(messageID: messageID)
+    }
+
+    /// Where a message lives: its account's identifier and mailbox path ("INBOX", "收件箱"),
+    /// for opening it through Mail's scripting when it has no Message-ID.
+    public func location(forRowID rowID: Int64) -> (account: String, mailbox: [String])? {
+        guard let version = versionDirectory,
+              let (_, mailbox) = Self.lookUp(rowID, in: version.appendingPathComponent("MailData/Envelope Index")) else { return nil }
+        let decoded = mailbox.removingPercentEncoding ?? mailbox
+        guard let schemeEnd = decoded.range(of: "://") else { return nil }
+        let path = decoded[schemeEnd.upperBound...].split(separator: "/").map(String.init)
+        guard path.count >= 2 else { return nil }
+        return (path[0], Array(path.dropFirst()))
+    }
+
+    /// "<abc@example.com>" → message://%3Cabc@example.com%3E
+    static func messageURL(messageID: String) -> URL? {
+        let bare = messageID.trimmingCharacters(in: CharacterSet(charactersIn: "<> \t"))
+        guard !bare.isEmpty else { return nil }
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~@$!&'()*+,;=:")
+        guard let encoded = bare.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        return URL(string: "message://%3C\(encoded)%3E")
+    }
+
+    /// The Message-ID header (possibly empty) and mailbox URL of a row, read from the live index
+    /// without copying it; a copy is used only if the live file can't be opened.
+    static func lookUp(_ rowID: Int64, in index: URL) -> (String, String)? {
+        func query(_ url: URL, flags: Int32) -> (String, String)? {
+            var db: OpaquePointer?
+            guard sqlite3_open_v2(url.absoluteString, &db, flags | SQLITE_OPEN_URI, nil) == SQLITE_OK else {
+                sqlite3_close(db)
+                return nil
+            }
+            defer { sqlite3_close(db) }
+            let sql = """
+                SELECT g.message_id_header, b.url FROM messages m
+                JOIN mailboxes b ON b.ROWID = m.mailbox
+                LEFT JOIN message_global_data g ON g.ROWID = m.global_message_id
+                WHERE m.ROWID = ?
+                """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_int64(stmt, 1, rowID)
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+            func text(_ column: Int32) -> String { sqlite3_column_text(stmt, column).map { String(cString: $0) } ?? "" }
+            return (text(0), text(1))
+        }
+        var live = URLComponents(url: index, resolvingAgainstBaseURL: false)!
+        live.queryItems = [URLQueryItem(name: "mode", value: "ro")]
+        if let live = live.url, let found = query(live, flags: SQLITE_OPEN_READONLY) { return found }
+
+        let fm = FileManager.default
+        let workDir = fm.temporaryDirectory.appendingPathComponent("gleaner-mail-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: workDir) }
+        guard (try? fm.createDirectory(at: workDir, withIntermediateDirectories: true)) != nil,
+              (try? fm.copyItem(at: index, to: workDir.appendingPathComponent("index"))) != nil else { return nil }
+        try? fm.copyItem(at: URL(fileURLWithPath: index.path + "-wal"), to: workDir.appendingPathComponent("index-wal"))
+        return query(workDir.appendingPathComponent("index"), flags: SQLITE_OPEN_READWRITE)
+    }
+
     // MARK: - Message files
 
     /// `V10/<account>/<mailbox>.mbox/<store>/Data/<partition>/Messages/<row>.emlx`, where the

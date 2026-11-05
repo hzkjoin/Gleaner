@@ -339,6 +339,119 @@ final class AppModel: ObservableObject {
         return granted
     }
 
+    // MARK: - Schedule suggestions
+
+    /// Asks the model, in the background, which new items are worth a calendar event or reminder.
+    private func suggestSchedules(for added: [ActionItem]) {
+        guard settings.scheduleSuggestions else { return }
+        let candidates = ScheduleSuggester.candidates(added)
+        guard !candidates.isEmpty else { return }
+        var configuration = settings.provider
+        configuration.reasoning = false
+        let suggester = ScheduleSuggester(provider: configuration.makeProvider(apiKey: apiKey(for: settings.provider)),
+                                          appName: { AppDirectory.shared.name(for: $0) })
+        Task { [weak self] in
+            do {
+                let suggestions = try await suggester.suggest(for: candidates)
+                guard let self, !suggestions.isEmpty else { return }
+                for index in items.indices {
+                    if let suggestion = suggestions[items[index].id] { items[index].schedule = suggestion }
+                }
+                saveItems()
+                log.info("Suggested \(suggestions.count) of \(candidates.count) items for the calendar")
+            } catch {
+                log.error("Schedule suggestion failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    /// Adds the (possibly edited) suggestion to Calendar or Reminders and files the item away.
+    @discardableResult
+    func addSchedule(for item: ActionItem, _ suggestion: ScheduleSuggestion) async -> Bool {
+        let app = AppDirectory.shared.name(for: item.appID)
+        let source = item.sourceTitle.isEmpty ? app : "\(app)「\(item.sourceTitle)」"
+        let note = [source, item.sourceExcerpt].filter { !$0.isEmpty }.joined(separator: "\n")
+        guard await calendar.add(suggestion, source: note) else { return false }
+        resolve([item], as: .scheduled)
+        refreshEvents()
+        return true
+    }
+
+    func dismissSchedule(for item: ActionItem) {
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[index].schedule = nil
+        saveItems()
+    }
+
+    // MARK: - Files
+
+    private var locatedFiles: [String: String?] = [:]
+
+    /// The item's files, plus WeChat files its messages mention that are still on disk.
+    func files(for item: ActionItem) -> [String] {
+        var result = item.files
+        guard item.appID.lowercased() == WeChatFileSource.appID else { return result }
+        for name in item.mentionedFiles where !result.contains(where: { ($0 as NSString).lastPathComponent == name }) {
+            if locatedFiles[name] == nil { locatedFiles[name] = .some(WeChatFileSource().locate(fileNamed: name)?.path) }
+            if let found = locatedFiles[name], let path = found { result.append(path) }
+        }
+        return result
+    }
+
+    private var fileOrigins: [String: (conversation: String, sender: String?)] = [:]
+
+    /// The chat and sender a received file came from, from the message announcing it. Found
+    /// origins are kept; misses are looked up again, as the message may arrive after the file.
+    func origin(ofFile path: String) -> (conversation: String, sender: String?)? {
+        if let known = fileOrigins[path] { return known }
+        guard let found = archive.origin(ofFileNamed: (path as NSString).lastPathComponent) else { return nil }
+        fileOrigins[path] = found
+        return found
+    }
+
+    // MARK: - Opening items
+
+    /// Opens where the item came from: the message itself for mail, otherwise the app.
+    func open(_ item: ActionItem) {
+        guard item.appID.lowercased() == MailSource.appID,
+              let rowID = item.sourceIDs.compactMap(MailSource.rowID(fromNotificationID:)).max() else {
+            AppDirectory.shared.open(item.appID)
+            return
+        }
+        Task.detached(priority: .userInitiated) {
+            let source = MailSource()
+            if let url = source.messageURL(forRowID: rowID) {
+                await MainActor.run { _ = NSWorkspace.shared.open(url) }
+                return
+            }
+            // Some senders leave out the Message-ID; ask Mail for the message by its number instead.
+            if let location = source.location(forRowID: rowID), Self.openInMail(rowID: rowID, location: location) { return }
+            await MainActor.run { AppDirectory.shared.open(MailSource.appID) }
+        }
+    }
+
+    /// Opens a message through Mail's scripting. The first use asks the user to allow Gleaner to
+    /// control Mail. Runs off the main thread.
+    nonisolated private static func openInMail(rowID: Int64, location: (account: String, mailbox: [String])) -> Bool {
+        func quoted(_ text: String) -> String {
+            "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        }
+        // Nested mailboxes: mailbox "子" of mailbox "父" of account.
+        let mailbox = location.mailbox.reversed().map { "mailbox \(quoted($0))" }.joined(separator: " of ")
+        let source = """
+        tell application "Mail"
+            set theAccount to first account whose id is \(quoted(location.account))
+            set theMessage to first message of \(mailbox) of theAccount whose id is \(rowID)
+            open theMessage
+            activate
+        end tell
+        """
+        var error: NSDictionary?
+        NSAppleScript(source: source)?.executeAndReturnError(&error)
+        if let error { log.error("Opening mail through scripting failed: \(error[NSAppleScript.errorNumber] as? Int ?? 0)") }
+        return error == nil
+    }
+
     enum ScheduleTarget { case reminder, event }
 
     /// When the item is due, if its due text can be read.
@@ -539,6 +652,7 @@ final class AppModel: ObservableObject {
             saveItems()
             addToDailyCount(analyzedCount)
             announce(added)
+            suggestSchedules(for: added)
             housekeeping()
         case .news(let newNews):
             log.info("Collected \(newNews.count) news items")
@@ -642,14 +756,123 @@ final class AppModel: ObservableObject {
 
     var currentChat: ChatSession? { chats.first { $0.id == currentChatID } }
 
+    /// What the next new conversation will be about, until its first question.
+    @Published private(set) var pendingAttachments: [ChatAttachment] = []
+
+    /// Files and messages waiting to be sent with the next question.
+    var currentAttachments: [ChatAttachment] { pendingAttachments }
+
+    /// Adds files to the next question, by reference: they are read where they are.
+    func attach(files urls: [URL]) {
+        for url in urls where url.isFileURL {
+            let attachment = ChatAttachment.file(path: url.path)
+            if !pendingAttachments.contains(attachment) { pendingAttachments.append(attachment) }
+        }
+    }
+
+    /// Saves a pasted image (it has no file of its own) and adds it to the next question.
+    func attach(image data: Data) {
+        let folder = Self.defaultDataDirectory.appendingPathComponent("pasted", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let file = folder.appendingPathComponent("截图 \(formatter.string(from: Date())).png")
+        guard (try? data.write(to: file)) != nil else { return }
+        attach(files: [file])
+    }
+
     /// Opens the question page on a fresh conversation.
     func startNewChat() {
         currentChatID = nil
+        pendingAttachments = []
         route = .ask
+    }
+
+    /// Opens the question page on a fresh conversation about a file or a message.
+    func startChat(about attachment: ChatAttachment) {
+        currentChatID = nil
+        pendingAttachments = [attachment]
+        route = .ask
+    }
+
+    /// The item as something to ask about: its file, or the message and its chat.
+    func attachment(for item: ActionItem) -> ChatAttachment {
+        if let path = item.attachmentPath { return .file(path: path) }
+        return .message(title: item.summary, appID: item.appID, conversation: item.sourceTitle,
+                        excerpt: item.sourceExcerpt.isEmpty ? item.summary : item.sourceExcerpt)
+    }
+
+    func removeAttachment(_ attachment: ChatAttachment) {
+        pendingAttachments.removeAll { $0 == attachment }
+    }
+
+    /// Reads attachments into text: a file's contents, or a message with its recent chat.
+    private func read(_ attachments: [ChatAttachment]) async -> [Assistant.Attachment] {
+        var result: [Assistant.Attachment] = []
+        for attachment in attachments {
+            switch attachment.kind {
+            case .file:
+                guard let path = attachment.path else { continue }
+                do {
+                    let content = try await fileText(at: path)
+                    result.append(.init(title: attachment.title, text: content.text, truncated: content.truncated))
+                } catch {
+                    result.append(.init(title: attachment.title, text: "（\(error.localizedDescription)）"))
+                }
+            case .message:
+                let appID = attachment.appID ?? ""
+                let app = AppDirectory.shared.name(for: appID)
+                let chat = archive.messages(in: ConversationKey(appID: appID, title: attachment.conversation ?? ""), limit: 40)
+                var text = "来自\(app)「\(attachment.conversation ?? "")」的消息：\(attachment.excerpt ?? attachment.title)"
+                if !chat.isEmpty { text += "\n\n这个会话最近的聊天记录（旧→新）：\n" + ConversationArchive.transcript(chat) }
+                result.append(.init(title: attachment.title, text: text))
+            }
+        }
+        return result
+    }
+
+    /// Text of a file, read once and kept for follow-up questions. Reading runs off the main thread.
+    private var fileTexts: [String: FileTextExtractor.Content] = [:]
+
+    private func fileText(at path: String) async throws -> FileTextExtractor.Content {
+        if let cached = fileTexts[path] { return cached }
+        let content = try await Task.detached(priority: .userInitiated) {
+            try FileTextExtractor.extract(from: URL(fileURLWithPath: path))
+        }.value
+        fileTexts[path] = content
+        return content
+    }
+
+    // MARK: - File summaries
+
+    /// Key points of received files, by path.
+    @Published private(set) var fileSummaries: [String: SummaryState] = [:]
+    private var fileSummaryTasks: [String: Task<Void, Never>] = [:]
+
+    func summarizeFile(_ path: String) {
+        fileSummaryTasks[path]?.cancel()
+        fileSummaries[path] = .loading
+        let assistant = assistant
+        fileSummaryTasks[path] = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let content = try await fileText(at: path)
+                let stream = assistant.summarizeFile(named: (path as NSString).lastPathComponent, content: content)
+                await Self.consume(stream) { self.fileSummaries[path] = $0 }
+            } catch {
+                fileSummaries[path] = .text(error.localizedDescription, done: true)
+            }
+        }
+    }
+
+    func dismissFileSummary(_ path: String) {
+        fileSummaryTasks[path]?.cancel()
+        fileSummaries[path] = nil
     }
 
     func openChat(_ id: UUID) {
         currentChatID = id
+        pendingAttachments = []
     }
 
     func deleteChat(_ id: UUID) {
@@ -658,25 +881,18 @@ final class AppModel: ObservableObject {
         saveChats()
     }
 
-    /// Asks in the current conversation, starting one if needed. The answer streams into the turn.
+    /// Asks in the current conversation, starting one if needed, with the attachments waiting in
+    /// the input. The answer streams into the turn.
+    ///
+    /// A conversation's context (instructions, open items, recent messages) is built at its first
+    /// question and reused; everything new for a later question goes into that question's preamble,
+    /// which is stored. Requests therefore repeat earlier ones exactly and only grow at the end,
+    /// so the provider can serve the repeated part from its prompt cache.
     func ask(_ question: String) {
         let question = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
         answerTask?.cancel()
         finishAnswering()
-
-        let history = currentChat?.turns ?? []
-        let turn = ChatTurn(question: question)
-        if let index = chats.firstIndex(where: { $0.id == currentChatID }) {
-            chats[index].turns.append(turn)
-            chats[index].updatedAt = Date()
-            chats.insert(chats.remove(at: index), at: 0)
-        } else {
-            let session = ChatSession(turns: [turn])
-            chats.insert(session, at: 0)
-            currentChatID = session.id
-        }
-        answeringTurnID = turn.id
 
         var configuration = settings.provider
         configuration.reasoning = false
@@ -689,19 +905,54 @@ final class AppModel: ObservableObject {
             : nil
         let assistant = Assistant(provider: configuration.makeProvider(apiKey: key, webSearch: native),
                                   userNames: settings.userNameList)
+
+        let attachments = pendingAttachments
+        pendingAttachments = []
+        let turn = ChatTurn(question: question, attachments: attachments)
         let since = Date().addingTimeInterval(-86_400)
-        let messages = archive.recent(since: since, limit: 500)
+        let previous = currentChat
+        let history = previous?.turns ?? []
+        // Messages that arrived after the context (or the last question) was put together.
+        var newMessages: [ArchivedMessage] = []
+        if let previous {
+            let cutoff = history.last?.date ?? previous.createdAt
+            newMessages = archive.recent(since: cutoff, limit: 200)
+        }
         // Older messages matching the question (and the previous one, for follow-ups like "那他呢").
         let earlier = archive.search([history.last?.question, question].compactMap { $0 }.joined(separator: " "),
                                      before: since, limit: 60)
-        let stream = assistant.converse(question, history: history, messages: messages,
-                                        openItems: visibleItems, earlier: earlier, search: search, nativeSearch: native,
-                                        gaps: gapNotes(for: Set(messages.map(\.appID)), from: since),
-                                        appName: { AppDirectory.shared.name(for: $0) })
+
+        let context: String
+        if let index = chats.firstIndex(where: { $0.id == currentChatID }) {
+            if let saved = chats[index].context {
+                context = saved
+            } else {
+                context = makeContext(assistant, since: since, canSearch: search != nil || native)
+                chats[index].context = context
+            }
+            chats[index].turns.append(turn)
+            chats[index].updatedAt = Date()
+            chats.insert(chats.remove(at: index), at: 0)
+        } else {
+            context = makeContext(assistant, since: since, canSearch: search != nil || native)
+            var session = ChatSession(turns: [turn])
+            session.context = context
+            chats.insert(session, at: 0)
+            currentChatID = session.id
+        }
+        answeringTurnID = turn.id
+
         let turnID = turn.id
+        let appName: @Sendable (String) -> String = { AppDirectory.shared.name(for: $0) }
         answerTask = Task { [weak self] in
             var text = ""
             do {
+                let read = await self?.read(attachments) ?? []
+                let preamble = Assistant.preamble(attachments: read, newMessages: newMessages, earlier: earlier, appName: appName)
+                self?.updateTurn(turnID) { $0.preamble = preamble }
+                var sent = turn
+                sent.preamble = preamble
+                let stream = assistant.converse(sent, history: history, context: context, search: search, nativeSearch: native)
                 for try await event in stream {
                     switch event {
                     case .searching(let query):
@@ -710,6 +961,8 @@ final class AppModel: ObservableObject {
                         text += piece
                         let cleaned = Assistant.clean(text)
                         self?.updateTurn(turnID) { $0.answer = cleaned }
+                    case .usage(let usage):
+                        log.info("Question used \(usage.promptTokens) prompt tokens, \(usage.cachedTokens) from cache")
                     }
                 }
             } catch is CancellationError {
@@ -719,6 +972,14 @@ final class AppModel: ObservableObject {
             self?.updateTurn(turnID) { $0.failed = $0.answer.isEmpty }
             if self?.answeringTurnID == turnID { self?.finishAnswering() }
         }
+    }
+
+    /// A new conversation's context: instructions, open items and the last day of messages.
+    private func makeContext(_ assistant: Assistant, since: Date, canSearch: Bool) -> String {
+        let messages = archive.recent(since: since, limit: 500)
+        return assistant.conversationContext(messages: messages, openItems: visibleItems, news: news, canSearch: canSearch,
+                                             gaps: gapNotes(for: Set(messages.map(\.appID)), from: since),
+                                             appName: { AppDirectory.shared.name(for: $0) })
     }
 
     private func updateTurn(_ id: UUID, _ change: (inout ChatTurn) -> Void) {

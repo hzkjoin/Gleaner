@@ -71,6 +71,20 @@ public final class ConversationArchive: @unchecked Sendable {
         return lock.withLock { Array((byConversation[key] ?? []).suffix(limit)) }
     }
 
+    /// Where a received file came from: the newest message announcing it ("张三: [文件] 报价单.pdf"),
+    /// giving the chat (its title) and, in groups, the sender.
+    public func origin(ofFileNamed name: String) -> (conversation: String, sender: String?)? {
+        let marker = "[文件] \(name)"
+        let message = lock.withLock {
+            // The file's own record (from the download folder) has no chat; skip it.
+            byConversation.values.joined().filter { !$0.title.isEmpty && $0.body.contains(marker) }.max { $0.date < $1.date }
+        }
+        guard let message else { return nil }
+        let prefix = message.body.components(separatedBy: marker).first?.trimmingCharacters(in: .whitespaces) ?? ""
+        let sender = prefix.hasSuffix(":") || prefix.hasSuffix("：") ? String(prefix.dropLast()).trimmingCharacters(in: .whitespaces) : nil
+        return (message.title, sender?.isEmpty == false ? sender : nil)
+    }
+
     /// Messages since `date` across all conversations, oldest first, at most `limit` (newest kept).
     public func recent(since date: Date, limit: Int = 400) -> [ArchivedMessage] {
         lock.withLock {

@@ -78,8 +78,10 @@ struct StubSearch: WebSearchService {
         ])
         let search = StubSearch(results: [WebResult(title: "沪指收涨", url: "u", site: "财经网", date: "2026-11-05", summary: "3686 点")])
         let history = [ChatTurn(question: "你好", answer: "在"), ChatTurn(question: "失败的", failed: true)]
-        let events = try await collect(Assistant(provider: provider).converse(
-            "上证收盘多少", history: history, messages: [], openItems: [], search: search, appName: { $0 }))
+        let assistant = Assistant(provider: provider)
+        let context = assistant.conversationContext(messages: [], openItems: [], canSearch: true, appName: { $0 })
+        let events = try await collect(assistant.converse(ChatTurn(question: "上证收盘多少"), history: history,
+                                                          context: context, search: search))
 
         #expect(events == [.searching("上证指数 收盘"), .text("收于 3686 点"), .text("（财经网）")])
         #expect(provider.calls.count == 2)
@@ -101,7 +103,7 @@ struct StubSearch: WebSearchService {
             [.text("答案")],
         ])
         let events = try await collect(Assistant(provider: provider).converse(
-            "问", history: [], messages: [], openItems: [], search: StubSearch(results: []), appName: { $0 }))
+            ChatTurn(question: "问"), history: [], context: "c", search: StubSearch(results: [])))
         #expect(events.last == .text("答案"))
         #expect(provider.calls.map(\.allowTools) == [true, true, false])
         #expect(provider.calls.last?.messages.last?.role == .user)
@@ -109,8 +111,9 @@ struct StubSearch: WebSearchService {
 
     @Test func withoutSearchNoToolsAreOffered() async throws {
         let provider = ScriptedChatProvider([[.text("好")]])
-        _ = try await collect(Assistant(provider: provider).converse(
-            "问", history: [], messages: [], openItems: [], search: nil, appName: { $0 }))
+        let assistant = Assistant(provider: provider)
+        let context = assistant.conversationContext(messages: [], openItems: [], canSearch: false, appName: { $0 })
+        _ = try await collect(assistant.converse(ChatTurn(question: "问"), history: [], context: context, search: nil))
         #expect(provider.calls.first?.toolCount == 0)
         #expect(provider.calls.first?.messages.first?.content.contains("联网搜索") == false)
     }
@@ -118,8 +121,8 @@ struct StubSearch: WebSearchService {
     @Test func singleTurnProvidersGetTheConversationAsText() async throws {
         let provider = StubProvider([.success("好的")])
         let events = try await collect(Assistant(provider: provider).converse(
-            "那他呢", history: [ChatTurn(question: "王总说了什么", answer: "要报价单")], messages: [], openItems: [],
-            search: nil, appName: { $0 }))
+            ChatTurn(question: "那他呢"), history: [ChatTurn(question: "王总说了什么", answer: "要报价单")],
+            context: "c", search: nil))
         #expect(events == [.text("好的")])
         let user = try #require(provider.receivedRequests.first?.user)
         #expect(user.contains("王总说了什么"))
@@ -247,5 +250,94 @@ struct StubSearch: WebSearchService {
         #expect(AnswerText.segments("小王问统计口径（是否含退款），结论按含退款算")
                 == [.init("小王问统计口径（是否含退款），结论按含退款算")])
         #expect(AnswerText.segments("沪指小幅震荡（东方财富）。") == [.init("沪指小幅震荡"), .init("（东方财富）", isSource: true), .init("。")])
+    }
+}
+
+@Suite struct AttachmentTests {
+    @Test func sessionsFromBeforeAttachmentsStillLoad() throws {
+        let old = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","turns":[],"createdAt":"2026-11-05T01:00:00Z","updatedAt":"2026-11-05T01:00:00Z"}"#
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        #expect(try decoder.decode(ChatSession.self, from: Data(old.utf8)).attachments.isEmpty)
+        let file = ChatAttachment.file(path: "/tmp/报价单.xlsx")
+        #expect(file.title == "报价单.xlsx")
+    }
+
+    @Test func questionsCarryTheirAttachments() async throws {
+        let provider = ScriptedChatProvider([[.text("好")]])
+        let preamble = Assistant.preamble(attachments: [.init(title: "报价单.xlsx", text: "Q3 回款\t120", truncated: true)],
+                                          appName: { $0 })
+        let turn = ChatTurn(question: "第三季度回款多少", preamble: preamble)
+        for try await _ in Assistant(provider: provider).converse(turn, history: [], context: "c", search: nil) {}
+        let user = try #require(provider.calls.first?.messages.last?.content)
+        #expect(user.contains("【报价单.xlsx】（较长，只提供了前面部分）"))
+        #expect(user.contains("Q3 回款\t120"))
+        #expect(user.hasSuffix("问题：第三季度回款多少"))
+    }
+
+    @Test func followUpsRepeatEarlierRequestsExactly() async throws {
+        // The second request must start with exactly what the first sent, so the provider's
+        // prompt cache can serve it.
+        let provider = ScriptedChatProvider([[.text("一")], [.text("二")]])
+        let assistant = Assistant(provider: provider)
+        var first = ChatTurn(question: "王总找我什么事", preamble: "刚收到的消息（旧→新）：\n王总：报价单")
+        for try await _ in assistant.converse(first, history: [], context: "上下文", search: nil) {}
+        first.answer = "一"
+        let second = ChatTurn(question: "那他什么时候要", preamble: "刚收到的消息（旧→新）：\n王总：今天下班前")
+        for try await _ in assistant.converse(second, history: [first], context: "上下文", search: nil) {}
+
+        func contents(_ call: Int) -> [String] { provider.calls[call].messages.map(\.content) }
+        #expect(Array(contents(1).prefix(contents(0).count)) == contents(0))
+        #expect(contents(1).count == contents(0).count + 2)
+    }
+
+    @Test func preambleOrdersNewMessagesOlderMatchesAndAttachments() {
+        let message = ArchivedMessage(id: "1", appID: "a", title: "王总", body: "报价单", date: Date())
+        let text = Assistant.preamble(attachments: [.init(title: "合同.docx", text: "第一条")], newMessages: [message],
+                                      earlier: [message], appName: { _ in "微信" })
+        let order = ["刚收到的消息", "更早的相关消息", "【合同.docx】"].map { text.range(of: $0)?.lowerBound }
+        #expect(order.allSatisfy { $0 != nil })
+        #expect(order[0]! < order[1]! && order[1]! < order[2]!)
+        #expect(Assistant.preamble(attachments: [], appName: { $0 }).isEmpty)
+    }
+
+    @Test func parsesCacheUsage() {
+        var deepseek = ChatStreamParser()
+        _ = deepseek.consume(#"data: {"choices":[],"usage":{"prompt_tokens":1200,"prompt_cache_hit_tokens":1024,"prompt_cache_miss_tokens":176}}"#)
+        #expect(deepseek.usage == PromptUsage(promptTokens: 1200, cachedTokens: 1024))
+        var openai = ChatStreamParser()
+        _ = openai.consume(#"data: {"choices":[],"usage":{"prompt_tokens":900,"prompt_tokens_details":{"cached_tokens":768}}}"#)
+        #expect(openai.usage == PromptUsage(promptTokens: 900, cachedTokens: 768))
+    }
+
+    @Test func turnsFromBeforeAttachmentsStillLoad() throws {
+        let old = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","question":"问","answer":"答"}"#
+        let turn = try JSONDecoder().decode(ChatTurn.self, from: Data(old.utf8))
+        #expect(turn.attachments.isEmpty && turn.preamble.isEmpty && turn.message == "问")
+    }
+
+    @Test func fileSummaryPrompt() {
+        let request = Assistant(provider: StubProvider([])).fileSummaryRequest(
+            named: "合同.docx", content: .init(text: "第一条", truncated: true))
+        #expect(request.user.contains("文件名：合同.docx"))
+        #expect(request.user.contains("只是前面部分"))
+        #expect(request.system.contains("需要用户做的事"))
+    }
+}
+
+@Suite struct NewsInContextTests {
+    @Test func contextListsCuratedNewsNewestFirst() {
+        func news(_ headline: String, minutesAgo: Double) -> NewsItem {
+            NewsItem(headline: headline, category: .finance, appID: "com.eastmoney", origin: .mac, sourceTitle: "东方财富",
+                     sourceExcerpt: "", date: Date().addingTimeInterval(-minutesAgo * 60))
+        }
+        let context = Assistant(provider: StubProvider([])).conversationContext(
+            messages: [], openItems: [], news: [news("光伏板块大涨", minutesAgo: 30), news("央行下调利率", minutesAgo: 5)],
+            canSearch: false, appName: { _ in "东方财富" })
+        #expect(context.contains("热点（已整理，新→旧）"))
+        let newer = context.range(of: "央行下调利率")!.lowerBound
+        let older = context.range(of: "光伏板块大涨")!.lowerBound
+        #expect(newer < older)
+        #expect(context.contains("问到热点、新闻、行情时"))
     }
 }

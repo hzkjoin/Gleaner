@@ -60,8 +60,21 @@ public struct ChatMessage: Sendable {
     public static func assistant(_ text: String) -> ChatMessage { ChatMessage(role: .assistant, content: text) }
 }
 
+/// Prompt tokens of one request, and how many were served from the provider's cache.
+public struct PromptUsage: Sendable, Equatable {
+    public var promptTokens: Int
+    public var cachedTokens: Int
+
+    public init(promptTokens: Int, cachedTokens: Int) {
+        self.promptTokens = promptTokens
+        self.cachedTokens = cachedTokens
+    }
+}
+
 public enum ChatStreamEvent: Sendable {
     case text(String)
+    /// Reported at the end of the reply, when the provider includes it.
+    case usage(PromptUsage)
     /// Sent once at the end of a reply that calls tools, with the reasoning that came with it.
     case toolCalls([ToolCall], reasoning: String?)
 }
@@ -78,6 +91,7 @@ public protocol ToolCallingProvider: LLMProvider {
 struct ChatStreamParser {
     private var calls: [Int: ToolCall] = [:]
     private(set) var reasoning = ""
+    private(set) var usage: PromptUsage?
 
     var toolCalls: [ToolCall] {
         calls.sorted { $0.key < $1.key }.map(\.value).filter { !$0.name.isEmpty }
@@ -88,8 +102,14 @@ struct ChatStreamParser {
         guard line.hasPrefix("data:") else { return nil }
         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
         guard payload != "[DONE]",
-              let json = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-              let delta = (json["choices"] as? [[String: Any]])?.first?["delta"] as? [String: Any] else { return nil }
+              let json = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any] else { return nil }
+        if let usage = json["usage"] as? [String: Any], let prompt = usage["prompt_tokens"] as? Int {
+            // DeepSeek reports `prompt_cache_hit_tokens`; OpenAI and others `prompt_tokens_details.cached_tokens`.
+            let cached = usage["prompt_cache_hit_tokens"] as? Int
+                ?? (usage["prompt_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int ?? 0
+            self.usage = PromptUsage(promptTokens: prompt, cachedTokens: cached)
+        }
+        guard let delta = (json["choices"] as? [[String: Any]])?.first?["delta"] as? [String: Any] else { return nil }
         if let thinking = delta["reasoning_content"] as? String { reasoning += thinking }
         for fragment in (delta["tool_calls"] as? [[String: Any]]) ?? [] {
             let index = fragment["index"] as? Int ?? 0

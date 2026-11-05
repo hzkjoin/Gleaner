@@ -6,6 +6,11 @@ public enum DueDateParser {
         public var date: Date
         /// False when only the day is known (an all-day item).
         public var hasTime: Bool
+
+        public init(date: Date, hasTime: Bool) {
+            self.date = date
+            self.hasTime = hasTime
+        }
     }
 
     public static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> Due? {

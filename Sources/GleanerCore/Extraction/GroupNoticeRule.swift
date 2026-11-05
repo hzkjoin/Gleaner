@@ -20,7 +20,7 @@ public enum GroupNoticeRule {
             .compactMap { messages -> ActionItem? in
                 let sorted = messages.sorted { $0.date < $1.date }
                 guard let latest = sorted.last else { return nil }
-                return ActionItem(
+                var item = ActionItem(
                     summary: snippet(of: latest.body),
                     priority: .low,
                     kind: .notice,
@@ -31,6 +31,8 @@ public enum GroupNoticeRule {
                     notificationDate: latest.date,
                     sourceIDs: sorted.map(\.id)
                 )
+                item.sourceMessages = sorted.map(\.body)
+                return item
             }
             .sorted { $0.notificationDate < $1.notificationDate }
     }

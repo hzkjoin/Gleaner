@@ -32,6 +32,15 @@ struct SettingsView: View {
                 ignoredSection
                 modelSection
                 searchSection
+                Section {
+                    Button { NSApplication.shared.terminate(nil) } label: {
+                        Text("退出拾穗")
+                            .foregroundStyle(Theme.textPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
@@ -136,6 +145,7 @@ struct SettingsView: View {
         Section("快捷") {
             Toggle("自动复制验证码", isOn: $draft.autoCopyCodes)
             Toggle("建议回复", isOn: $draft.suggestReplies)
+            Toggle("日程建议", isOn: $draft.scheduleSuggestions)
         }
     }
 

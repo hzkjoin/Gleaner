@@ -37,6 +37,8 @@ struct AppSettings: Codable, Equatable {
     var suggestReplies: Bool = true
     /// Let the assistant search the web when the provider offers it.
     var webSearch: Bool = true
+    /// Let the model propose calendar events and reminders for items that mention a time.
+    var scheduleSuggestions: Bool = true
     /// Where to search when the model can't by itself.
     var searchChannel: WebSearchChannel = .deepseek
     /// Rules written in plain words, compiled by the model.
@@ -75,7 +77,7 @@ struct AppSettings: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case provider, userNames, ignoredApps, showTopItemInMenuBar, collectNews, autoCopyCodes,
              mutedConversations, irrelevantExamples, launchAtLoginConfigured, showCalendar, briefings,
-             readMessages, readWeChatFiles, quietDuringFocus, suggestReplies, rules, launchAtLogin, webSearch, searchChannel, readMail
+             readMessages, readWeChatFiles, quietDuringFocus, suggestReplies, rules, launchAtLogin, webSearch, searchChannel, readMail, scheduleSuggestions
     }
 
     /// Settings saved by older versions lack newer keys; keep what is there, default the rest.
@@ -102,6 +104,7 @@ struct AppSettings: Codable, Equatable {
         webSearch = try c.decodeIfPresent(Bool.self, forKey: .webSearch) ?? defaults.webSearch
         searchChannel = (try? c.decodeIfPresent(WebSearchChannel.self, forKey: .searchChannel)) ?? defaults.searchChannel
         readMail = try c.decodeIfPresent(Bool.self, forKey: .readMail) ?? defaults.readMail
+        scheduleSuggestions = try c.decodeIfPresent(Bool.self, forKey: .scheduleSuggestions) ?? defaults.scheduleSuggestions
     }
 
     static func load(from defaults: UserDefaults = .standard) -> AppSettings {

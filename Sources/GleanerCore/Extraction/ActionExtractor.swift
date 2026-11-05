@@ -132,24 +132,44 @@ public struct ActionExtractor: Sendable {
 
     /// Validates an extracted action against the batch and builds an `ActionItem`.
     /// Returns nil for empty summaries or when no source index is in range.
+    /// Whether `summary` names a code that appears, exactly, in the source messages.
+    static func hasVerifiableCode(_ summary: String, in sources: [AppNotification]) -> Bool {
+        let text = sources.map { [$0.title, $0.subtitle, $0.body].joined(separator: " ") }.joined(separator: " ")
+        var rest = summary[...]
+        while let range = rest.range(of: VerificationCodeDetector.codePattern, options: .regularExpression) {
+            if text.contains(String(rest[range])) { return true }
+            rest = rest[range.upperBound...]
+        }
+        return false
+    }
+
     static func makeItem(from action: ExtractedAction, batch: [AppNotification]) -> ActionItem? {
         let sources = action.sources.filter { (1...batch.count).contains($0) }.map { batch[$0 - 1] }
         let summary = action.summary.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let latest = sources.max(by: { $0.date < $1.date }), !summary.isEmpty else { return nil }
 
-        let kind = ActionKind(rawValue: action.kind?.lowercased() ?? "") ?? .task
+        var kind = ActionKind(rawValue: action.kind?.lowercased() ?? "") ?? .task
+        var priority = Priority(rawValue: action.priority?.lowercased() ?? "") ?? .medium
+        if kind == .code && !hasVerifiableCode(summary, in: sources) {
+            // A code the model wrote must be in the message as written; otherwise it isn't shown as one.
+            kind = .notice
+            priority = .low
+        }
 
-        return ActionItem(
+        let ordered = sources.sorted { $0.date < $1.date }
+        var item = ActionItem(
             summary: summary,
             due: action.due?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
-            priority: Priority(rawValue: action.priority?.lowercased() ?? "") ?? .medium,
+            priority: priority,
             kind: kind,
             appID: latest.appID,
             origin: latest.origin,
             sourceTitle: latest.title,
-            sourceExcerpt: sources.map(\.body).joined(separator: " / "),
+            sourceExcerpt: ordered.map(\.body).joined(separator: " / "),
             notificationDate: latest.date,
-            sourceIDs: sources.map(\.id)
+            sourceIDs: ordered.map(\.id)
         )
+        item.sourceMessages = ordered.map(\.body)
+        return item
     }
 }

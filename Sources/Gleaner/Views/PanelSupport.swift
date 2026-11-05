@@ -43,4 +43,10 @@ enum PanelDismissal {
     static var handler: (() -> Void)?
 
     static func dismiss() { handler?() }
+
+    /// True while a file dialog is open on top of the panel: focus moving around then
+    /// shouldn't close the panel.
+    static var isPickingFiles = false
+    /// Set by `MenuBarController`: brings the panel back to the front with keyboard focus.
+    static var refocus: (() -> Void)?
 }

@@ -110,13 +110,14 @@ public struct OpenAICompatibleProvider: ToolCallingProvider {
                     }
                     if !reasoning && ProviderConfiguration.isLocalHost(url.host) { body["reasoning_effort"] = "none" }
                     if webSearch { body["enable_search"] = true }
-                    var urlRequest = URLRequest(url: url, timeoutInterval: 180)
-                    urlRequest.httpMethod = "POST"
-                    requestHeaders.forEach { urlRequest.setValue($1, forHTTPHeaderField: $0) }
-                    urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-                    let (bytes, response) = try await URLSession.shared.bytes(for: urlRequest)
-                    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    // Ask for token usage at the end of the stream, to see prompt cache hits.
+                    body["stream_options"] = ["include_usage": true]
+                    var (bytes, status) = try await openStream(url: url, body: body)
+                    if status == 400 {
+                        // Some servers reject stream_options; ask again without it.
+                        body.removeValue(forKey: "stream_options")
+                        (bytes, status) = try await openStream(url: url, body: body)
+                    }
                     guard status == 200 else {
                         var text = ""
                         for try await line in bytes.lines where text.count < 300 { text += line }
@@ -127,6 +128,7 @@ public struct OpenAICompatibleProvider: ToolCallingProvider {
                         if line.hasPrefix("data:"), line.contains("[DONE]") { break }
                         if let piece = parser.consume(line) { continuation.yield(.text(piece)) }
                     }
+                    if let usage = parser.usage { continuation.yield(.usage(usage)) }
                     let calls = parser.toolCalls
                     if !calls.isEmpty {
                         continuation.yield(.toolCalls(calls, reasoning: parser.reasoning.isEmpty ? nil : parser.reasoning))
@@ -138,6 +140,15 @@ public struct OpenAICompatibleProvider: ToolCallingProvider {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    private func openStream(url: URL, body: [String: Any]) async throws -> (URLSession.AsyncBytes, Int) {
+        var urlRequest = URLRequest(url: url, timeoutInterval: 180)
+        urlRequest.httpMethod = "POST"
+        requestHeaders.forEach { urlRequest.setValue($1, forHTTPHeaderField: $0) }
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (bytes, response) = try await URLSession.shared.bytes(for: urlRequest)
+        return (bytes, (response as? HTTPURLResponse)?.statusCode ?? 0)
     }
 
     static func encode(_ message: ChatMessage) -> [String: Any] {

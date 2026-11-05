@@ -32,7 +32,12 @@ struct GroupedItemsCard: View {
                 if hovering {
                     HStack(spacing: 0) {
                         if model.canSummarize(conversation) {
-                            IconButton(symbol: "text.alignleft", help: "总结") { model.summarize(conversation) }
+                            IconButton(symbol: "list.bullet.clipboard", help: "总结") { model.summarize(conversation) }
+                        }
+                        IconButton(symbol: "sparkles", help: "提问") {
+                            // The newest message of the group, with the chat around it.
+                            let latest = items.max { $0.notificationDate < $1.notificationDate } ?? first
+                            model.startChat(about: model.attachment(for: latest))
                         }
                         IconMenu(symbol: "hand.thumbsdown", help: "不相关") {
                             if !first.sourceTitle.isEmpty {
@@ -66,8 +71,7 @@ struct GroupedItemsCard: View {
         .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
             .strokeBorder(hovering ? Theme.cardStrokeHover : Theme.cardStroke, lineWidth: 0.5))
         .onHover { hovering = $0 }
-        .clickable { AppDirectory.shared.open(first.appID) }
-        .hoverHint("打开\(appName)", followsPointer: true)
+        .clickable { model.open(items.max { $0.notificationDate < $1.notificationDate } ?? first) }
         .animation(.easeOut(duration: 0.15), value: hovering)
     }
 }

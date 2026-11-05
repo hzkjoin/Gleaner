@@ -11,19 +11,31 @@ public enum VerificationCodeDetector {
     /// A 4–8 character code containing at least one digit, not part of a longer token.
     static let codePattern = #"(?<![A-Za-z0-9])(?=[A-Za-z]*\d)[A-Za-z0-9]{4,8}(?![A-Za-z0-9])"#
 
-    /// Returns the code in `text` when it reads like a verification message.
-    /// `flaggedBySystem` skips the keyword check when the OS already marked the text as a passcode.
-    public static func code(in text: String, flaggedBySystem: Bool = false) -> String? {
-        let lowered = text.lowercased()
-        guard flaggedBySystem || keywords.contains(where: { lowered.contains($0.lowercased()) }) else { return nil }
+    /// How far after a keyword the code may be. Long texts (emails) mention "OTP" in footers far
+    /// from any number that belongs to it.
+    static let maxDistance = 80
 
-        // Prefer the code closest after a keyword, e.g. "验证码为 482913" rather than a phone number before it.
+    /// Returns the code in `text` when it reads like a verification message: one that follows a
+    /// keyword closely. `flaggedBySystem` (the OS marked the text as a passcode) allows a code
+    /// without a keyword.
+    public static func code(in text: String, flaggedBySystem: Bool = false) -> String? {
         for keyword in keywords {
-            guard let keywordRange = text.range(of: keyword, options: .caseInsensitive) else { continue }
-            let tail = text[keywordRange.upperBound...]
-            if let range = tail.range(of: codePattern, options: .regularExpression) { return String(tail[range]) }
+            for keywordRange in occurrences(of: keyword, in: text) {
+                let tail = text[keywordRange.upperBound...].prefix(maxDistance)
+                if let range = tail.range(of: codePattern, options: .regularExpression) { return String(tail[range]) }
+            }
         }
+        guard flaggedBySystem else { return nil }
         return text.range(of: codePattern, options: .regularExpression).map { String(text[$0]) }
+    }
+
+    /// Where `keyword` appears; English keywords only as whole words ("OTP", not "hotpot").
+    static func occurrences(of keyword: String, in text: String) -> [Range<String.Index>] {
+        let isEnglish = keyword.unicodeScalars.allSatisfy(\.isASCII)
+        let escaped = NSRegularExpression.escapedPattern(for: keyword)
+        let pattern = isEnglish ? "(?<![A-Za-z])\(escaped)(?![A-Za-z])" : escaped
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return [] }
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { Range($0.range, in: text) }
     }
 
     /// The sender shown in brackets, e.g. "某某云" from "【某某云】您的验证码…".
@@ -32,8 +44,21 @@ public enum VerificationCodeDetector {
         return String(text[range].dropFirst().dropLast())
     }
 
-    /// A code item for `note`, or nil when it does not contain a verification code.
+    /// Longer texts are left to the model, which reads the whole thing.
+    static let maxRuleLength = 300
+
+    /// Whether the rule decides for this notification: texts flagged by the system as passcodes,
+    /// and short messages. Mail and long texts mention codes and security notices in ways a rule
+    /// misreads (a statement's footer about OTPs), so the model decides those, a few seconds later.
+    public static func appliesByRule(to note: AppNotification) -> Bool {
+        if note.isOneTimePasscode { return true }
+        guard note.appID.lowercased() != MailSource.appID else { return false }
+        return [note.title, note.subtitle, note.body].joined(separator: " ").count <= maxRuleLength
+    }
+
+    /// A code item for `note`, or nil when it does not contain a verification code (or is left to the model).
     public static func item(for note: AppNotification) -> ActionItem? {
+        guard appliesByRule(to: note) else { return nil }
         let text = [note.title, note.subtitle, note.body].joined(separator: " ")
         guard let code = code(in: text, flaggedBySystem: note.isOneTimePasscode) else { return nil }
         let sender = sender(in: text) ?? note.title

@@ -59,6 +59,107 @@ public struct ActionItem: Codable, Identifiable, Hashable, Sendable {
     public var sourceIDs: [String]
     /// A file the item refers to (a received file), opened from the card.
     public var attachmentPath: String?
+    /// A calendar event or reminder proposed for the item, until the user adds or dismisses it.
+    public var schedule: ScheduleSuggestion?
+    /// The source messages one by one, oldest first. Empty for items saved before it existed.
+    public var sourceMessages: [String] = []
+    /// Received files gathered into this item when items were merged.
+    public var sourceFiles: [String] = []
+
+    /// Every received file the item covers: its own and any merged in.
+    public var files: [String] {
+        var result = attachmentPath.map { [$0] } ?? []
+        for path in sourceFiles where !result.contains(path) { result.append(path) }
+        return result
+    }
+
+    /// File names the messages mention as sent files ("张三: [文件] 报价单.xlsx").
+    public var mentionedFiles: [String] {
+        messages.compactMap { message in
+            let text = Self.stripSender(message)
+            guard text.hasPrefix("[文件]") else { return nil }
+            let name = text.dropFirst(4).trimmingCharacters(in: .whitespaces)
+            return name.isEmpty ? nil : name
+        }
+    }
+
+    /// The messages to show as text, leaving out lines that only name a file in `files`,
+    /// since those files appear as their own boxes.
+    public func textMessages(files: [String]) -> [String] {
+        let names = Set(files.map { ($0 as NSString).lastPathComponent })
+        guard !names.isEmpty else { return messages }
+        return messages.filter { message in
+            var text = Self.stripSender(message)
+            if text.hasPrefix("[文件]") { text = String(text.dropFirst(4)).trimmingCharacters(in: .whitespaces) }
+            return !names.contains(text)
+        }
+    }
+
+    public var textMessages: [String] { textMessages(files: files) }
+
+    /// One line of an item's source: a message, or a file shown where it was sent.
+    public enum SourceEntry: Hashable, Sendable {
+        case text(String)
+        /// `sender` is nil for the file source's own line, which has no sender.
+        case file(sender: String?, path: String)
+    }
+
+    /// The source messages in order, with each of `files` placed where it was sent: at its
+    /// "张三: [文件] 名字" message, or at the bare file name line; files mentioned nowhere go last.
+    public func sourceEntries(files: [String]) -> [SourceEntry] {
+        let byName = Dictionary(files.map { (($0 as NSString).lastPathComponent, $0) }, uniquingKeysWith: { first, _ in first })
+        // Names that have a "[文件]" message: their bare name lines are duplicates.
+        let sent = Set(messages.compactMap { message -> String? in
+            let text = Self.stripSender(message)
+            return text.hasPrefix("[文件]") ? text.dropFirst(4).trimmingCharacters(in: .whitespaces) : nil
+        })
+        var placed = Set<String>()
+        var entries: [SourceEntry] = []
+        for message in messages {
+            let text = Self.stripSender(message)
+            if text.hasPrefix("[文件]") {
+                let name = text.dropFirst(4).trimmingCharacters(in: .whitespaces)
+                if let path = byName[name], !placed.contains(path) {
+                    placed.insert(path)
+                    entries.append(.file(sender: Self.sender(of: message), path: path))
+                    continue
+                }
+            } else if let path = byName[text] {
+                if sent.contains(text) || placed.contains(path) { continue }
+                placed.insert(path)
+                entries.append(.file(sender: Self.sender(of: message), path: path))
+                continue
+            }
+            entries.append(.text(message))
+        }
+        for path in files where !placed.contains(path) { entries.append(.file(sender: nil, path: path)) }
+        return entries
+    }
+
+    /// "张三" from "张三: 内容", or nil when the message has no sender.
+    static func sender(of message: String) -> String? {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let colon = text.firstIndex(where: { $0 == ":" || $0 == "：" }), text.distance(from: text.startIndex, to: colon) <= 20 else {
+            return nil
+        }
+        let sender = text[..<colon].trimmingCharacters(in: .whitespaces)
+        return sender.isEmpty ? nil : sender
+    }
+
+    /// "张三: 内容" → "内容".
+    static func stripSender(_ message: String) -> String {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let colon = text.firstIndex(where: { $0 == ":" || $0 == "：" }), text.distance(from: text.startIndex, to: colon) <= 20 {
+            return String(text[text.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+        }
+        return text
+    }
+
+    /// The source messages one by one, oldest first; older items split their joined excerpt.
+    public var messages: [String] {
+        if !sourceMessages.isEmpty { return sourceMessages }
+        return sourceExcerpt.components(separatedBy: " / ").filter { !$0.isEmpty }
+    }
 
     public init(
         id: UUID = UUID(),
@@ -106,7 +207,7 @@ public struct ActionItem: Codable, Identifiable, Hashable, Sendable {
 extension ActionItem {
     private enum CodingKeys: String, CodingKey {
         case id, summary, due, priority, kind, suggestedReply, appID, origin, sourceTitle, sourceExcerpt,
-             notificationDate, createdAt, snoozedUntil, sourceIDs, attachmentPath
+             notificationDate, createdAt, snoozedUntil, sourceIDs, attachmentPath, schedule, sourceMessages, sourceFiles
     }
 
     /// Decodes items saved by earlier versions, which lacked some of the newer fields.
@@ -129,6 +230,9 @@ extension ActionItem {
             sourceIDs: try c.decodeIfPresent([String].self, forKey: .sourceIDs) ?? [],
             attachmentPath: try c.decodeIfPresent(String.self, forKey: .attachmentPath)
         )
+        schedule = try c.decodeIfPresent(ScheduleSuggestion.self, forKey: .schedule)
+        sourceMessages = try c.decodeIfPresent([String].self, forKey: .sourceMessages) ?? []
+        sourceFiles = try c.decodeIfPresent([String].self, forKey: .sourceFiles) ?? []
     }
 }
 

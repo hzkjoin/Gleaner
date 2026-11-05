@@ -201,7 +201,8 @@ extension View {
     func hintLayer() -> some View {
         overlayPreferenceValue(HintPreferenceKey.self) { request in
             GeometryReader { proxy in
-                if let request {
+                // An empty hint only keeps a surrounding card's hint from showing.
+                if let request, !request.text.isEmpty {
                     HintBubble(request: request, target: proxy[request.anchor], container: proxy.size)
                         .transition(.opacity)
                 }

@@ -62,6 +62,8 @@ private struct ChatThread: View {
     @EnvironmentObject private var model: AppModel
     @State private var question = ""
     @FocusState private var focused: Bool
+    @State private var pasteMonitor: Any?
+    @State private var dropTargeted = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -92,12 +94,98 @@ private struct ChatThread: View {
             }
             input
         }
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            // ⌘V with files or an image on the clipboard attaches them; text pastes as usual.
+            pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                      event.charactersIgnoringModifiers == "v",
+                      MainActor.assumeIsolated({ pasteAttachments() }) else { return event }
+                return nil
+            }
+        }
+        .onDisappear {
+            if let pasteMonitor { NSEvent.removeMonitor(pasteMonitor) }
+            pasteMonitor = nil
+        }
+        .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
+            for provider in providers {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in model.attach(files: [url]) }
+                }
+            }
+            return true
+        }
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                    .strokeBorder(Theme.textTertiary, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                    .padding(8)
+                    .allowsHitTesting(false)
+            }
+        }
         .onChange(of: model.currentChatID) { _, _ in focused = true }
     }
 
     private var input: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(model.currentAttachments, id: \.self) { attachment in
+                AttachmentChip(attachment: attachment) { model.removeAttachment(attachment) }
+            }
+            field
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 7)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).fill(Theme.card)
+            .shadow(color: .black.opacity(0.04), radius: 1.5, y: 1))
+        .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+            .strokeBorder(Theme.cardStroke, lineWidth: 0.5))
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 12)
+    }
+
+    /// Attaches files or an image from the clipboard; false when it holds neither (plain text).
+    private func pasteAttachments() -> Bool {
+        let board = NSPasteboard.general
+        if let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           !urls.isEmpty {
+            model.attach(files: urls)
+            return true
+        }
+        guard board.string(forType: .string) == nil,
+              let image = NSImage(pasteboard: board), let tiff = image.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return false }
+        model.attach(image: png)
+        return true
+    }
+
+    private func chooseFiles() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        // Above the menu bar panel, which floats at status bar level.
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+        NSApp.activate()
+        PanelDismissal.isPickingFiles = true
+        panel.begin { response in
+            if response == .OK { model.attach(files: panel.urls) }
+            // Hand focus back to the menu bar panel, which macOS would otherwise give to the
+            // previous app (and the panel would close).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                PanelDismissal.isPickingFiles = false
+                PanelDismissal.refocus?()
+            }
+        }
+    }
+
+    private var field: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            IconButton(symbol: "paperclip", help: "添加文件", action: chooseFiles)
+                .padding(.leading, -6)
+                .padding(.bottom, -1)
             TextField("", text: $question, prompt: Text(model.currentChat == nil ? "问点什么" : "继续问"), axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
@@ -115,16 +203,6 @@ private struct ChatThread: View {
             .buttonStyle(.plain)
             .disabled(!canSend)
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 7)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).fill(Theme.card)
-            .shadow(color: .black.opacity(0.04), radius: 1.5, y: 1))
-        .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-            .strokeBorder(Theme.cardStroke, lineWidth: 0.5))
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .padding(.bottom, 12)
     }
 
     private var canSend: Bool {
@@ -145,6 +223,16 @@ private struct TurnView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !turn.attachments.isEmpty {
+                HStack {
+                    Spacer(minLength: 48)
+                    VStack(alignment: .trailing, spacing: 6) {
+                        ForEach(turn.attachments, id: \.self) { attachment in
+                            SentAttachment(attachment: attachment)
+                        }
+                    }
+                }
+            }
             HStack {
                 Spacer(minLength: 48)
                 Text(turn.question)
@@ -236,5 +324,90 @@ private struct ChatRow: View {
             .fill(hovering ? Theme.subtleFill : .clear))
         .onHover { hovering = $0 }
         .clickable(action: open)
+    }
+}
+
+/// A file or message waiting to be sent, with a way to drop it.
+private struct AttachmentChip: View {
+    let attachment: ChatAttachment
+    let remove: () -> Void
+
+    static func label(for attachment: ChatAttachment) -> String {
+        guard attachment.kind == .message, let conversation = attachment.conversation, !conversation.isEmpty else {
+            return attachment.title
+        }
+        return "\(conversation)：\(attachment.excerpt ?? attachment.title)"
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            AttachmentIcon(attachment: attachment)
+            Text(Self.label(for: attachment))
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            IconButton(symbol: "xmark", help: "去掉", action: remove)
+                .padding(.vertical, -6)
+        }
+        .padding(.leading, 7)
+        .padding(.trailing, 1)
+        .padding(.vertical, 3)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.inset))
+    }
+}
+
+/// An attachment sent with a question: images as thumbnails, other files and messages as labels.
+/// Clicking a file opens it.
+private struct SentAttachment: View {
+    let attachment: ChatAttachment
+
+    private var image: NSImage? {
+        guard attachment.kind == .file, let path = attachment.path,
+              FileTextExtractor.images.contains((path as NSString).pathExtension.lowercased()) else { return nil }
+        return NSImage(contentsOfFile: path)
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: 180, maxHeight: 120)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Theme.cardStroke, lineWidth: 0.5))
+            } else {
+                HStack(spacing: 6) {
+                    AttachmentIcon(attachment: attachment)
+                    Text(AttachmentChip.label(for: attachment))
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Theme.cardStroke, lineWidth: 0.5))
+            }
+        }
+        .clickable {
+            guard attachment.kind == .file, let path = attachment.path else { return }
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            PanelDismissal.dismiss()
+        }
+    }
+}
+
+private struct AttachmentIcon: View {
+    let attachment: ChatAttachment
+
+    var body: some View {
+        if attachment.kind == .file, let path = attachment.path {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable().frame(width: 16, height: 16)
+        } else {
+            AppIcon(bundleID: attachment.appID ?? "", size: 14)
+        }
     }
 }
