@@ -19,19 +19,6 @@
 
 > 项目处于早期阶段（0.x），功能可用，但设置项和数据格式在 1.0 之前可能变化。
 
-## 目录
-
-- [功能](#功能)
-- [安装](#安装)
-- [配置](#配置)
-- [隐私与数据](#隐私与数据)
-- [免责声明](#免责声明)
-- [从源码构建](#从源码构建)
-- [项目结构](#项目结构)
-- [已知限制](#已知限制)
-- [参与贡献](#参与贡献)
-- [许可证](#许可证)
-
 ## 功能
 
 **收集**
@@ -148,33 +135,15 @@ scripts/build-app.sh          # 生成 build/拾穗.app
 scripts/install.sh            # 安装到 /Applications 并启动
 ```
 
-macOS 按代码签名识别应用的隐私授权。`build-app.sh` 依次尝试环境变量 `GLEANER_SIGN_IDENTITY` 指定的证书、`scripts/make-signing-cert.sh` 生成的自签名证书、Apple 开发者证书；都没有时使用临时签名，每次重新安装都需要重新授权。
+没有签名证书时，每次重新安装都需要重新授予权限。可以先运行 `scripts/make-signing-cert.sh` 生成一张自签名证书。
 
 常用命令：
 
 ```bash
-scripts/swiftw build      # 编译
+scripts/swiftw build      # 编译（swift 的包装，兼容只装了 Command Line Tools 的环境）
 scripts/swiftw test       # 运行测试
 scripts/run-dev.sh        # 构建调试版并在终端运行
 ```
-
-`scripts/swiftw` 是 `swift` 命令的包装：只装了 Command Line Tools 时，macOS 27 SDK 缺少 SwiftUI 需要的宏插件，`swiftw` 会改用一个可用的 SDK。装了 Xcode 时等同于直接运行 `swift`。
-
-部分测试会访问真实的模型或本机数据，需要设置环境变量才会运行，见 `Tests/GleanerCoreTests/LiveModelTests.swift`。
-
-### 发布新版本
-
-```bash
-scripts/release.sh 0.2.0 [更新说明.md]
-```
-
-脚本会更新版本号、编译签名、打包 DMG、生成签名的更新清单 `appcast.xml`，并在 GitHub 上创建 Release。已安装的拾穗从 `releases/latest/download/appcast.xml` 检查更新。
-
-第一次发版前需要：
-
-- 签名证书：运行 `scripts/make-signing-cert.sh`，备份会保存在 `~/.gleaner-signing`。之后的每个版本都必须使用同一张证书，否则用户的授权会失效，也无法收到更新。
-- 更新密钥：把 [Sparkle 2.10.0](https://github.com/sparkle-project/Sparkle/releases/tag/2.10.0) 解压到 `.tools/sparkle-2.10.0`，运行 `.tools/sparkle-2.10.0/bin/generate_keys --account gleaner`，把输出的公钥填入 `Resources/Info.plist` 的 `SUPublicEDKey`。私钥同样需要备份。
-- 用 `gh auth login` 登录仓库所在的 GitHub 账号。
 
 ## 项目结构
 

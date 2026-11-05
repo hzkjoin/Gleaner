@@ -204,17 +204,3 @@ struct LiveMailSourceTests {
         #expect(!notes.isEmpty)
     }
 }
-
-/// Parses one local .emlx file. Prints lengths and whether a code was found, never content.
-/// Enable with `GLEANER_LIVE_EMLX=/path/to/file.emlx`.
-@Suite("Live emlx", .enabled(if: ProcessInfo.processInfo.environment["GLEANER_LIVE_EMLX"] != nil))
-struct LiveEMLXTests {
-    @Test func parses() throws {
-        let path = ProcessInfo.processInfo.environment["GLEANER_LIVE_EMLX"]!
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
-        let text = MailMessageText.text(fromEMLX: data) ?? ""
-        let note = AppNotification(id: "x", appID: MailSource.appID, title: "t", body: text, date: Date())
-        let code = VerificationCodeDetector.item(for: note)?.verificationCode
-        print("emlx: \(data.count) bytes, text \(text.count) chars, code found: \(code != nil) (\(code?.count ?? 0) digits)")
-    }
-}
