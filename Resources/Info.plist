@@ -26,7 +26,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>LSHasLocalizedDisplayName</key>
 	<true/>
 	<key>LSMinimumSystemVersion</key>
@@ -42,7 +42,7 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string></string>
+	<string>https://github.com/hzkjoin/Gleaner/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>U1sKwyTZqCtDifACzCISeG4WRZQ+6FdrVshLn5tJJoE=</string>
 	<key>SUScheduledCheckInterval</key>
