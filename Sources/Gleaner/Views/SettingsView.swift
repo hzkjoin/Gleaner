@@ -23,18 +23,20 @@ struct SettingsView: View {
     @State private var ruleFailed = false
     @State private var testResult: String?
     @State private var testing = false
+    @FocusState private var keyFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Form {
+                // The model comes first: nothing works until it is set up.
+                modelSection
+                searchSection
                 generalSection
                 sourcesSection
                 shortcutsSection
                 recognitionSection
                 ignoredSection
-                modelSection
-                searchSection
                 Section {
                     Button { NSApplication.shared.terminate(nil) } label: {
                         Text("退出拾穗")
@@ -53,6 +55,8 @@ struct SettingsView: View {
         .onAppear {
             load()
             launchAtLogin = LoginItem.state
+            // Arriving from the setup prompt: start in the key field.
+            if model.needsModelSetup && apiKey.isEmpty && !draft.provider.isLocal { keyFocused = true }
         }
     }
 
@@ -420,6 +424,7 @@ struct SettingsView: View {
     private var apiKeyRow: some View {
         if editingKey || apiKey.isEmpty {
             SecureField("API Key", text: $apiKey, prompt: Text(draft.provider.isLocal ? "可留空" : "粘贴 Key"))
+                .focused($keyFocused)
         } else {
             LabeledContent("API Key") {
                 HStack(spacing: 6) {

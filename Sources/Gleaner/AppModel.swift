@@ -694,11 +694,13 @@ final class AppModel: ObservableObject {
         let archive = archive
         let replies = settings.suggestReplies
             ? ReplyWriter(provider: replyConfiguration.makeProvider(apiKey: apiKey), context: { item in
-                archive.messages(in: ConversationKey(appID: item.appID, title: item.sourceTitle), limit: 20)
+                archive.messages(in: ConversationKey(appID: item.appID, title: item.sourceTitle), limit: 30)
             })
             : nil
-        return Self.makeExtractor(configuration: settings.provider, apiKey: apiKey, userNames: settings.userNameList,
-                                  irrelevantExamples: settings.irrelevantExamples.map(\.promptLine), replyWriter: replies)
+        var extractor = Self.makeExtractor(configuration: settings.provider, apiKey: apiKey, userNames: settings.userNameList,
+                                           irrelevantExamples: settings.irrelevantExamples.map(\.promptLine), replyWriter: replies)
+        extractor.history = { archive.messages(in: $0, limit: 40) }
+        return extractor
     }
 
     private static func makeExtractor(configuration: ProviderConfiguration, apiKey: String, userNames: [String],
@@ -1221,10 +1223,9 @@ final class AppModel: ObservableObject {
         let extractor = Self.makeExtractor(configuration: configuration, apiKey: apiKey, userNames: userNames)
         let start = Date()
         do {
-            let found = try await extractor.extract(from: samples)
+            _ = try await extractor.extract(from: samples)
             let seconds = String(format: "%.1f", Date().timeIntervalSince(start))
-            let lines = found.map(\.summary).joined(separator: "\n")
-            return "连接正常，用时 \(seconds) 秒\n\(lines)"
+            return "连接正常，用时 \(seconds) 秒"
         } catch {
             return "连接失败：\(error.localizedDescription)"
         }

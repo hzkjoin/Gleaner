@@ -44,7 +44,7 @@ struct MentionAnalyzerTests {
     @Test("marks group chat messages that mention nobody", arguments: [
         ("com.tencent.xinwechat", "张三: 估值这块大家怎么看？", MentionAnalyzer.Addressee.nobodyInGroup),
         ("com.tencent.weworkmac", "李四：明天的会改到下午", .nobodyInGroup),
-        ("com.tencent.xinwechat", "估值这块你怎么看？", .unspecified),
+        ("com.tencent.xinwechat", "估值这块你怎么看？", .direct),
         ("com.apple.mail", "Hi: please review the attached file", .unspecified),
     ])
     func groupMessages(app: String, body: String, expected: MentionAnalyzer.Addressee) {
@@ -122,5 +122,106 @@ struct ActionExtractorFilteringTests {
         await #expect(throws: LLMError.self) {
             try await ActionExtractor(provider: provider).extract(from: [note("1", body: "在吗", at: date)])
         }
+    }
+}
+
+@Suite("MentionAnalyzer with WeChat chats")
+struct WeChatMentionTests {
+    let analyzer = MentionAnalyzer(userNames: ["小明", "Ming Wang"])
+    let wechat = "com.tencent.xinwechat"
+
+    func check(_ body: String, chat: String? = nil, names: [String]? = nil) -> MentionAnalyzer.Addressee {
+        let analyzer = names.map { MentionAnalyzer(userNames: $0) } ?? analyzer
+        return analyzer.addressee(of: AppNotification(id: "x", appID: wechat, title: "项目群", body: body, date: Date(), chatID: chat))
+    }
+
+    @Test func weChatsMentionedYouNoticeIsForTheUser() {
+        // WeChat replaces the message with this when someone @mentions the user.
+        #expect(check("张三在群聊中@了你", chat: "123@chatroom") == .user)
+        #expect(check("张三在群聊中@了你", chat: "123@chatroom", names: []) == .user)
+    }
+
+    @Test func chatIDTellsGroupsFromOneToOneChats() {
+        #expect(check("注意：明天九点到", chat: "wxid_abc") == .direct)
+        #expect(check("注意：明天九点到", chat: "123@chatroom") == .nobodyInGroup)
+        #expect(check("没有前缀的群消息", chat: "123@chatroom") == .nobodyInGroup)
+        // An @ in a one-to-one chat is still written to the user.
+        #expect(check("帮我 @李四 一下", chat: "wxid_abc") == .direct)
+        #expect(check("张三: @李四 看下", chat: "123@chatroom") == .others)
+    }
+
+    @Test func namesWrittenWithAnAtOrSpacesStillMatch() {
+        #expect(check("张三: @小明 看下", names: ["@小明"]) == .user)
+        #expect(check("张三: @Ming Wang 看下") == .user)
+        #expect(check("张三: ＠小明 看下") == .user)
+    }
+
+    @Test func readsTheChatFromNotificationUserInfo() throws {
+        let info = try NSKeyedArchiver.archivedData(withRootObject: ["chatname": "123@chatroom", "unique_id": "u"] as NSDictionary,
+                                                    requiringSecureCoding: false)
+        let record = try PropertyListSerialization.data(fromPropertyList: ["req": ["titl": "项目群", "body": "张三在群聊中@了你", "usda": info]],
+                                                        format: .binary, options: 0)
+        let content = MacNotificationCenterSource.Content(plist: record)
+        #expect(content.chatID == "123@chatroom")
+        #expect(MacNotificationCenterSource.Content(plist: try PropertyListSerialization.data(
+            fromPropertyList: ["req": ["titl": "a", "body": "b"]], format: .binary, options: 0)).chatID == nil)
+    }
+
+    @Test func oneToOneChatsAreTaggedForTheModel() {
+        let note = AppNotification(id: "1", appID: wechat, title: "陈静", body: "明天能来吗", date: Date(), chatID: "wxid_abc")
+        let prompt = ExtractionPrompt.user(notifications: [(note, .direct)], now: Date(), appName: { _ in "微信" })
+        #expect(prompt.contains("【私聊】明天能来吗"))
+    }
+}
+
+@Suite("DirectMessageRule")
+struct DirectMessageRuleTests {
+    let analyzer = MentionAnalyzer(userNames: [])
+    func dm(_ id: String, _ who: String, _ body: String, chat: String) -> AppNotification {
+        AppNotification(id: id, appID: "com.tencent.xinwechat", title: who, body: body,
+                        date: Date(timeIntervalSince1970: 1_800_000_000 + Double(id)!), chatID: chat)
+    }
+
+    @Test func messagesTheModelPassedOverAreShown() {
+        let batch = [dm("1", "刘洋", "111", chat: "wxid_a"), dm("2", "刘洋", "哈哈", chat: "wxid_a"),
+                     dm("3", "项目群", "张三: 收到", chat: "9@chatroom"), dm("4", "某公众号", "新文章", chat: "gh_123")]
+        let items = DirectMessageRule.apply(to: [], batch: batch, analyzer: analyzer, covered: [])
+        #expect(items.count == 1)
+        #expect(items[0].kind == .notice)
+        #expect(items[0].sourceIDs == ["1", "2"])
+        #expect(items[0].sourceMessages == ["111", "哈哈"])
+    }
+
+    @Test func joinTheChatsExistingItem() {
+        let existing = ActionItem(summary: "回复刘洋", priority: .medium, kind: .reply, appID: "com.tencent.xinwechat",
+                                  sourceTitle: "刘洋", sourceExcerpt: "明天能来吗", notificationDate: Date(timeIntervalSince1970: 1_800_000_000),
+                                  sourceIDs: ["1"])
+        let batch = [dm("1", "刘洋", "明天能来吗", chat: "wxid_a"), dm("2", "刘洋", "111", chat: "wxid_a")]
+        let items = DirectMessageRule.apply(to: [existing], batch: batch, analyzer: analyzer, covered: ["1"])
+        #expect(items.count == 1)
+        #expect(items[0].kind == .reply)
+        #expect(items[0].sourceIDs == ["1", "2"])
+        #expect(items[0].messages == ["明天能来吗", "111"])
+    }
+
+    @Test func officialAccountsAreNotPeople() {
+        #expect(!MentionAnalyzer.isDirectChat(dm("1", "某公众号", "新文章", chat: "gh_123")))
+        #expect(!MentionAnalyzer.isDirectChat(dm("1", "项目群", "新文章", chat: "9@chatroom")))
+        #expect(MentionAnalyzer.isDirectChat(dm("1", "老朋友", "在吗", chat: "custom_id")))
+    }
+}
+
+@Suite("Replies to @ notices")
+struct MentionedReplyTests {
+    @Test func noReplyIsWrittenForAnAtNoticeAlone() async {
+        let provider = StubProvider(always: #"{"replies":[{"id":1,"reply":"在的"}]}"#)
+        var mentioned = ActionItem(summary: "查看周凯在群里的@", priority: .medium, kind: .reply, appID: "com.tencent.xinwechat",
+                                   sourceTitle: "球友群", sourceExcerpt: "周凯（主管）在群聊中@了你", notificationDate: Date(), sourceIDs: ["1"])
+        mentioned.sourceMessages = ["周凯（主管）在群聊中@了你"]
+        let items = await ReplyWriter(provider: provider).addReplies(to: [mentioned], userNames: [])
+        #expect(items[0].suggestedReply.isEmpty)
+        #expect(ReplyWriter.onlySaysMentioned(mentioned))
+        mentioned.sourceMessages.append("张三: 明天几点集合？")
+        #expect(!ReplyWriter.onlySaysMentioned(mentioned))
     }
 }

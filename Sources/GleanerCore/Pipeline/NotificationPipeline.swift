@@ -37,6 +37,12 @@ public actor NotificationPipeline {
     private let source: NotificationSource
     private let stateStore: JSONFileStore<PipelineState>?
     private var state: PipelineState
+    /// On first launch, how far back to analyze, counted from the first successful read.
+    private let initialLookback: TimeInterval
+    private let clock: @Sendable () -> Date
+    /// No progress has been saved yet: the first read may come long after launch (access
+    /// granted later), and should still only look back `initialLookback`.
+    private var startsFresh: Bool
     private var seen: Set<String>
     private var lastToken: Date?
     private var isRunning = false
@@ -50,6 +56,7 @@ public actor NotificationPipeline {
     /// - Parameters:
     ///   - initialLookback: On first launch, how far back to analyze.
     ///   - stateStore: Where progress is persisted; `nil` keeps it in memory only.
+    ///   - now: A fixed time for tests; the clock otherwise.
     public init(
         source: NotificationSource,
         stateStore: JSONFileStore<PipelineState>?,
@@ -57,14 +64,20 @@ public actor NotificationPipeline {
         initialLookback: TimeInterval = 3600,
         overlap: TimeInterval = 2,
         maxSeenIDs: Int = 5000,
-        now: Date = Date()
+        now: Date? = nil
     ) {
         self.source = source
         self.stateStore = stateStore
         self.batchSize = batchSize
         self.overlap = overlap
         self.maxSeenIDs = maxSeenIDs
-        let restored = stateStore?.load() ?? PipelineState(cursor: now.addingTimeInterval(-initialLookback))
+        let clock: @Sendable () -> Date
+        if let now { clock = { now } } else { clock = { Date() } }
+        self.clock = clock
+        self.initialLookback = initialLookback
+        let saved = stateStore?.load()
+        self.startsFresh = saved == nil
+        let restored = saved ?? PipelineState(cursor: clock().addingTimeInterval(-initialLookback))
         self.state = restored
         self.seen = Set(restored.seenIDs)
     }
@@ -104,7 +117,12 @@ public actor NotificationPipeline {
         isRunning = true
         defer { isRunning = false }
 
+        if startsFresh {
+            let floor = clock().addingTimeInterval(-initialLookback)
+            if state.cursor < floor { state.cursor = floor }
+        }
         let notifications = try source.fetch(after: state.cursor.addingTimeInterval(-overlap))
+        startsFresh = false
         let unseen = notifications.filter { !seen.contains($0.id) }
         let (fresh, duplicates) = separateDuplicates(unseen)
         markSeen(duplicates)
@@ -148,6 +166,9 @@ public actor NotificationPipeline {
             // Substantive group messages the model passed over become notices by rule.
             let covered = Set((codes + items).flatMap(\.sourceIDs))
             items += GroupNoticeRule.items(in: messages, analyzer: analyzer, covered: covered)
+            // One-to-one chats are always shown.
+            items = DirectMessageRule.apply(to: items, batch: messages, analyzer: analyzer,
+                                            covered: covered.union(items.flatMap(\.sourceIDs)))
             items = Self.applyRules(filter, to: items, batch: messages)
             markSeen(batch)
             advanceCursor(to: batch.map(\.date).max())

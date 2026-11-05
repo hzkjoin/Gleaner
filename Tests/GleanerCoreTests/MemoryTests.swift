@@ -44,7 +44,10 @@ struct ConversationArchiveTests {
     func transcript() {
         let text = ConversationArchive.transcript([message("1", "王总", "报价单发我", minutes: 0),
                                                    message("2", "王总", "好的，下班前发", minutes: 1, fromMe: true)])
-        #expect(text.contains(" 报价单发我") && text.contains(" 我: 好的，下班前发"))
+        // One-to-one lines are named after the other person: they never are the user's.
+        #expect(text.contains(" 王总: 报价单发我") && text.contains(" 我: 好的，下班前发"))
+        let group = ConversationArchive.transcript([message("3", "项目群", "张三: 周五交", minutes: 2)])
+        #expect(group.hasSuffix(" 张三: 周五交"))
     }
 
     @Test("the pipeline archives messages, including the user's own, but never analyzes the user's own")

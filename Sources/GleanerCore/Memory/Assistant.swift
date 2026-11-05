@@ -463,12 +463,15 @@ public struct Assistant: Sendable {
         你是用户的助理。今天是\(today)。用户的称呼：\(names)。
         - 先根据下面的消息记录和待办回答；记录里找不到就直说\(searchRule)
         - 问到热点、新闻、行情时，先用下面"热点"里已整理的内容，不够再补充
-        - 简短直接，一般不超过 6 行；列举时每行以"- "开头，涉及消息时在句末用括号注明是谁、在哪个会话，如（微信，王总，11-05 09:30）
+        - 像聊天一样直接回答，一两句话能说清就不要分条；只有并列好几项时才每行以"- "开头；一般不超过 6 行
+        - 涉及消息时在句末用括号注明是谁、在哪个会话，如（微信，王总，11-05 09:30）
         - 不要使用"·"符号
         - 引用原话用「」，重点可用 **加粗**，不用标题和表格
         - 你只能回答问题，不能替用户发消息或操作，不要问"要不要我…"
-        - 问到的事若落在下面"记录可能不全"的时段，说明那段记录可能缺失
+        - 只有问到的事正好落在下面"记录可能不全"的时段、记录里又找不到时，才提一句那段记录可能缺失
         - 不要开场白和客套话
+
+        \(RecordNote.text)
 
         待办：
         \(items.isEmpty ? "无" : items)
@@ -482,14 +485,24 @@ public struct Assistant: Sendable {
     }
 
     func summaryRequest(_ messages: [ArchivedMessage], conversation: String, gaps: [String] = []) -> CompletionRequest {
-        let gapRule = gaps.isEmpty ? "" : "\n- 记录有缺失时段：不要把缺失当成没人说话；最后一行写\"- 部分时段记录缺失\""
+        let gapRule = gaps.isEmpty ? "" : "\n- 下面列出的时段记录可能不全：不要把那段时间当成没人说话，也不要专门写一行说明记录缺失"
         let system = """
-        总结下面这段聊天记录，给用户快速了解。用户的称呼：\(names)。
-        - 最多 5 行，每行一句，不超过 30 字，以"- "开头；不要使用"·"符号
-        - 先写和用户有关的事（找他、问他、需要他做的），再写其他要点
-        - 不要寒暄、不要评价、不要多余的开场白\(gapRule)
+        用两三句话告诉用户这段聊天在说什么。用户的称呼：\(names)。
+        - 像同事替他转述一样概括意思，不要按顺序复述每句话，不要写"某某说……某某又说……"
+        - 先说和他有关的：谁在找他、为了什么、需不需要他做什么；没有就直说"没有需要你处理的"
+        - 不分条，不用"- "开头，不超过 80 字；不要使用"·"符号
+        - 不要寒暄、评价和开场白\(gapRule)
+
+        \(RecordNote.text)
         """ + Self.gapNote(gaps)
-        return CompletionRequest(system: system, user: "会话：\(conversation)\n\n" + ConversationArchive.transcript(messages))
+        // Without "Sender: " lines it is a one-to-one chat: everything not marked "我:" is the
+        // other person talking to the user.
+        let direct = !messages.isEmpty && !messages.contains {
+            $0.body.range(of: MentionAnalyzer.groupSenderPattern, options: .regularExpression) != nil
+        }
+        let heading = direct ? "会话：和\(conversation)的私聊（没标\"我:\"的都是\(conversation)对用户说的）"
+                             : "会话：\(conversation)"
+        return CompletionRequest(system: system, user: heading + "\n\n" + ConversationArchive.transcript(messages))
     }
 
     /// Drops a reasoning preamble and surrounding whitespace from streamed or complete output.

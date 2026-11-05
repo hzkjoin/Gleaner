@@ -155,7 +155,10 @@ public final class ConversationArchive: @unchecked Sendable {
         save()
     }
 
-    /// "11-04 19:40 张三: 报价单发我", one message per line.
+    /// "11-04 19:40 张三: 报价单发我", one message per line, each with who said it: group
+    /// messages carry their sender, the user's own are "我", and one-to-one messages (no sender
+    /// in the text) are the other person's, named by the chat. Chat apps only record what others
+    /// send, so a line without "我" is never the user's.
     public static func transcript(_ messages: [ArchivedMessage], includeConversation: Bool = false,
                                   appName: (String) -> String = { $0 }) -> String {
         let formatter = DateFormatter()
@@ -163,8 +166,15 @@ public final class ConversationArchive: @unchecked Sendable {
         return messages.map { message in
             var line = formatter.string(from: message.date) + " "
             if includeConversation { line += "[\(appName(message.appID))，\(message.title)] " }
-            line += message.fromMe ? "我: " : ""
-            return line + message.body.replacingOccurrences(of: "\n", with: " ")
+            let body = message.body.replacingOccurrences(of: "\n", with: " ")
+            if message.fromMe {
+                line += "我: "
+            } else if !message.title.isEmpty,
+                      body.range(of: MentionAnalyzer.groupSenderPattern, options: .regularExpression) == nil,
+                      !MentionAnalyzer.saysMentionedYou(body) {
+                line += "\(message.title): "
+            }
+            return line + body
         }.joined(separator: "\n")
     }
 

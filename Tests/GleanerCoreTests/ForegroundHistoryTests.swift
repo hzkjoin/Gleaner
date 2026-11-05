@@ -48,7 +48,8 @@ import Testing
         let assistant = Assistant(provider: StubProvider([]))
         let request = assistant.summaryRequest([], conversation: "项目群", gaps: ["微信：09:12–09:40"])
         #expect(request.system.contains("09:12–09:40"))
-        #expect(request.system.contains("部分时段记录缺失"))
+        // Told, but not to add a line about it to every summary.
+        #expect(request.system.contains("不要专门写一行说明记录缺失"))
         #expect(!assistant.summaryRequest([], conversation: "项目群").system.contains("记录可能不全"))
     }
 }

@@ -56,7 +56,7 @@ struct GroupedItemsCard: View {
             }
             .frame(height: 16)
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 10) {
                 let mixed = Set(items.map(\.kind)).count > 1
                 ForEach(items) { GroupedItemLine(item: $0, showsKind: mixed) }
             }
@@ -83,6 +83,16 @@ private struct GroupedItemLine: View {
     @State private var hovering = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            titleLine
+            // The messages behind it, as on a single card.
+            let entries = item.sourceEntries(files: model.files(for: item))
+            if !entries.isEmpty { SourceList(entries: entries).padding(.leading, 11) }
+        }
+        .onHover { hovering = $0 }
+    }
+
+    private var titleLine: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Circle()
                 .fill(item.priority == .high ? Theme.urgent : Theme.textTertiary.opacity(0.5))
@@ -93,7 +103,7 @@ private struct GroupedItemLine: View {
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(Theme.textTertiary)
             }
-            Text(item.kind == .reply && !item.sourceExcerpt.isEmpty ? item.sourceExcerpt : item.summary)
+            Text(item.summary)
                 .font(.system(size: 13, weight: .medium))
                 .lineLimit(4)
                 .foregroundStyle(Theme.textPrimary)
@@ -108,6 +118,5 @@ private struct GroupedItemLine: View {
                 .padding(.vertical, -6)
                 .opacity(hovering ? 1 : 0)
         }
-        .onHover { hovering = $0 }
     }
 }

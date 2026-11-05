@@ -20,11 +20,15 @@ enum ExtractionPrompt {
         请找出其中【需要用户本人采取行动或值得用户关注】的事项。用户的称呼：\(names)。
 
         通知里的标记：【@我】表示消息 @ 了用户；【@所有人】表示 @ 了全体成员；
-        【群消息未@人】表示群里没有 @ 任何人的消息，这类消息只能作为 notice 输出。
+        【群消息未@人】表示群里没有 @ 任何人的消息，这类消息只能作为 notice 输出；
+        【私聊】表示一对一聊天，消息是直接发给用户的。
         群聊通知的标题是群名，正文是"发送人: 内容"；私聊通知的标题是对方名字。
+        部分会话附有"聊天背景"：这批通知之前的聊天记录，只用来理解上下文、把 summary 写准，不要为背景里的消息单独输出事项。
+        背景显示有人刚 @ 了用户或在问用户时，之后同一个人的追问（如"？""在吗""怎么说"）算作在找用户，按 reply 输出。
+        微信里有人 @ 用户时，正文只有"某人在群聊中@了你"，看不到对方说了什么：作为 reply 输出，summary 写"查看某人在群里的@"，不要猜测内容。
 
         需要输出的情况：
-        - 私聊里有人向用户提问、请求或催促
+        - 带【私聊】的消息全部输出：有提问、请求、催促的按 reply 或 task，其余作为 notice；同一个人的合并成一条
         - 带【@我】或【@所有人】的群消息里，有需要用户回应或处理的事
         - 需要用户审批、确认、填写、付款
         - 打卡异常、支付失败、账号安全这类需要用户处理的提醒
@@ -50,16 +54,25 @@ enum ExtractionPrompt {
           alert：异常或安全提醒（打卡异常、支付失败、异地登录）
           notice：值得用户知道、但不必马上处理的事，priority 用 low
 
+        \(RecordNote.text)
+
         只输出 JSON，格式为：
         {"actions":[{"sources":[1],"summary":"...","due":"","priority":"medium","kind":"reply"}]}
         没有需要处理的事项时输出 {"actions":[]}
         """
     }
 
+    /// Earlier messages of a group chat in the batch.
+    struct Background: Sendable {
+        var conversation: ConversationKey
+        var messages: [ArchivedMessage]
+    }
+
     static func user(
         notifications: [(note: AppNotification, addressee: MentionAnalyzer.Addressee)],
         now: Date,
-        appName: (String) -> String
+        appName: (String) -> String,
+        backgrounds: [Background] = []
     ) -> String {
         let header = DateFormatter()
         header.locale = Locale(identifier: "zh_CN")
@@ -77,10 +90,18 @@ enum ExtractionPrompt {
             case .user: tag = "【@我】"
             case .everyone: tag = "【@所有人】"
             case .nobodyInGroup: tag = "【群消息未@人】"
+            case .direct: tag = "【私聊】"
             case .others, .unspecified: tag = ""
             }
             let body = note.body.replacingOccurrences(of: "\n", with: " ")
             lines.append("[\(index + 1)] \(stamp.string(from: note.date)) | \(appName(note.appID)) | \(title) | \(tag)\(body)")
+        }
+        if !backgrounds.isEmpty {
+            lines += ["", "聊天背景（只用来理解上下文）："]
+            for background in backgrounds {
+                lines.append("【\(appName(background.conversation.appID))，\(background.conversation.title)】")
+                lines.append(ConversationArchive.transcript(background.messages))
+            }
         }
         return lines.joined(separator: "\n")
     }

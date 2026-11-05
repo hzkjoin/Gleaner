@@ -89,16 +89,19 @@ public struct MacNotificationCenterSource: NotificationSource {
 
             let id = uuid.isEmpty ? "\(recordID)-\(delivered.timeIntervalSinceReferenceDate)" : uuid
             result.append(AppNotification(id: id, appID: appID, title: content.title,
-                                          subtitle: content.subtitle, body: content.body, date: delivered))
+                                          subtitle: content.subtitle, body: content.body, date: delivered,
+                                          chatID: content.chatID))
         }
         return result
     }
 
-    /// The text fields of a notification record's binary plist (`req.titl`, `req.subt`, `req.body`).
+    /// The text fields of a notification record's binary plist (`req.titl`, `req.subt`, `req.body`),
+    /// and the chat it belongs to from the app's user info (`req.usda`), where present.
     struct Content {
         var title = ""
         var subtitle = ""
         var body = ""
+        var chatID: String?
 
         init() {}
 
@@ -108,6 +111,17 @@ public struct MacNotificationCenterSource: NotificationSource {
             title = request["titl"] as? String ?? ""
             subtitle = request["subt"] as? String ?? ""
             body = request["body"] as? String ?? ""
+            if let userInfo = request["usda"] as? Data { chatID = Self.chatID(fromUserInfo: userInfo) }
+        }
+
+        /// WeChat archives a dictionary whose "chatname" is the chat: "…@chatroom" for groups,
+        /// the contact's id for one-to-one chats.
+        static func chatID(fromUserInfo data: Data) -> String? {
+            let classes: [AnyClass] = [NSDictionary.self, NSString.self, NSNumber.self, NSArray.self, NSData.self, NSDate.self]
+            guard let info = try? NSKeyedUnarchiver.unarchivedObject(ofClasses: classes, from: data) as? [String: Any] else {
+                return nil
+            }
+            return (info["chatname"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         }
     }
 }

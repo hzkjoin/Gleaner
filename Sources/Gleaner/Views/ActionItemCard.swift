@@ -182,7 +182,8 @@ struct AppIcon: View {
 /// The original message, quoted with a thin bar.
 /// The source messages one per line, newest last, with received files in place. Long runs
 /// show the latest two, with the earlier ones a click away.
-private struct SourceList: View {
+/// An item's messages, oldest first, with files where they were sent.
+struct SourceList: View {
     @EnvironmentObject private var model: AppModel
     let entries: [ActionItem.SourceEntry]
     @State private var expanded = false

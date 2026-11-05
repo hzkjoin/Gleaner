@@ -196,7 +196,8 @@ struct PipelineActivityTests {
         #expect(outcomes["boss"] == .item(kind: .task, summary: "发报价单"))
         #expect(outcomes["code"] == .item(kind: .code, summary: "验证码 482913（某某云）"))
         #expect(outcomes["news"] == .news(headline: "某地发生地震"))
-        #expect(outcomes["chat"] == .skipped(.notActionable))
+        // One-to-one chats are always shown, even small talk the model passed over.
+        #expect(outcomes["chat"] == .item(kind: .notice, summary: "哈哈哈"))
         #expect(await log.records.count == 7)
     }
 

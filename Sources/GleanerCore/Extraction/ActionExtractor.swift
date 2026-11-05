@@ -29,6 +29,16 @@ public struct ActionExtractor: Sendable {
     /// Maps a bundle identifier to a human-readable app name for the prompt.
     public var appName: @Sendable (String) -> String
     public var now: @Sendable () -> Date
+    /// Recent messages of a chat, oldest first, shown with group messages so the model can tell
+    /// what they answer; nil to send none.
+    public var history: (@Sendable (ConversationKey) -> [ArchivedMessage])?
+
+    /// Background for chats: at most this many earlier messages per chat…
+    static let backgroundLimit = 10
+    /// …from the two hours before the batch…
+    static let backgroundWindow: TimeInterval = 2 * 3_600
+    /// …for this many chats at most.
+    static let backgroundChats = 8
 
     public init(
         provider: LLMProvider,
@@ -36,7 +46,8 @@ public struct ActionExtractor: Sendable {
         irrelevantExamples: [String] = [],
         replyWriter: ReplyWriter? = nil,
         appName: @escaping @Sendable (String) -> String = { $0 },
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        history: (@Sendable (ConversationKey) -> [ArchivedMessage])? = nil
     ) {
         self.provider = provider
         self.userNames = userNames
@@ -44,6 +55,28 @@ public struct ActionExtractor: Sendable {
         self.replyWriter = replyWriter
         self.appName = appName
         self.now = now
+        self.history = history
+    }
+
+    /// Earlier messages of the chats in `batch` (groups and one-to-one), from before the batch's
+    /// first message in each chat, newest chats first.
+    func backgrounds(for batch: [AppNotification]) -> [ExtractionPrompt.Background] {
+        guard let history else { return [] }
+        let ids = Set(batch.map(\.id))
+        let chats = batch.filter { MentionAnalyzer.isGroupMessage($0) || MentionAnalyzer.isDirectChat($0) }
+        let groups = Dictionary(grouping: chats) {
+            ConversationKey(appID: $0.appID.lowercased(), title: $0.title)
+        }
+        return groups.sorted { ($0.value.map(\.date).max() ?? .distantPast) > ($1.value.map(\.date).max() ?? .distantPast) }
+            .prefix(Self.backgroundChats)
+            .compactMap { key, notes -> ExtractionPrompt.Background? in
+                guard let start = notes.map(\.date).min() else { return nil }
+                let earlier = history(key).filter {
+                    !ids.contains($0.id) && $0.date <= start && start.timeIntervalSince($0.date) <= Self.backgroundWindow
+                }
+                guard !earlier.isEmpty else { return nil }
+                return ExtractionPrompt.Background(conversation: key, messages: Array(earlier.suffix(Self.backgroundLimit)))
+            }
     }
 
     public func extract(from notifications: [AppNotification]) async throws -> [ActionItem] {
@@ -55,9 +88,18 @@ public struct ActionExtractor: Sendable {
         let detectedCodes = VerificationCodeDetector.items(in: notifications)
         guard !relevant.isEmpty else { return detectedCodes }
 
+        let backgrounds = backgrounds(for: relevant.map(\.note))
+        // Chats where the user was just @mentioned or named: a follow-up there may be meant for them.
+        let calledOn = Set(backgrounds.filter { background in
+            background.messages.contains { message in
+                analyzer.namesUser(message.body)
+                    || analyzer.addressee(of: AppNotification(id: message.id, appID: message.appID, title: message.title,
+                                                              body: message.body, date: message.date)) == .user
+            }
+        }.map(\.conversation))
         let request = CompletionRequest(
             system: ExtractionPrompt.system(userNames: userNames, irrelevantExamples: irrelevantExamples),
-            user: ExtractionPrompt.user(notifications: relevant, now: now(), appName: appName),
+            user: ExtractionPrompt.user(notifications: relevant, now: now(), appName: appName, backgrounds: backgrounds),
             jsonSchema: ExtractionPrompt.schema
         )
         let actions = try await completeAndParse(request)
@@ -66,7 +108,12 @@ public struct ActionExtractor: Sendable {
             guard var item = Self.makeItem(from: action, batch: batch) else { return nil }
             // A group message that @mentions nobody is at most worth a look, whatever the model said.
             let sources = action.sources.filter { (1...relevant.count).contains($0) }
-            if item.kind != .code, sources.allSatisfy({ relevant[$0 - 1].addressee == .nobodyInGroup }) {
+            let followsMention = sources.contains { index in
+                let note = relevant[index - 1].note
+                return analyzer.namesUser(note.body)
+                    || calledOn.contains(ConversationKey(appID: note.appID.lowercased(), title: note.title))
+            }
+            if item.kind != .code, !followsMention, sources.allSatisfy({ relevant[$0 - 1].addressee == .nobodyInGroup }) {
                 item.kind = .notice
                 item.priority = .low
             }

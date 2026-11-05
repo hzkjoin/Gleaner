@@ -26,6 +26,9 @@ public struct AppNotification: Identifiable, Hashable, Sendable {
     public let attachmentPath: String?
     /// Sent by the user (Messages only). Kept as context, never analyzed.
     public let isFromUser: Bool
+    /// The chat's identifier inside its app, where the app tells (WeChat's "chatname": group
+    /// chats end in "@chatroom").
+    public let chatID: String?
 
     public init(
         id: String,
@@ -38,7 +41,8 @@ public struct AppNotification: Identifiable, Hashable, Sendable {
         isOneTimePasscode: Bool = false,
         mentionsUser: Bool = false,
         attachmentPath: String? = nil,
-        isFromUser: Bool = false
+        isFromUser: Bool = false,
+        chatID: String? = nil
     ) {
         self.id = id
         self.appID = appID
@@ -51,6 +55,13 @@ public struct AppNotification: Identifiable, Hashable, Sendable {
         self.mentionsUser = mentionsUser
         self.attachmentPath = attachmentPath
         self.isFromUser = isFromUser
+        self.chatID = chatID
+    }
+
+    /// Whether this came from a group chat, when the app says; nil when unknown.
+    public var isGroupChat: Bool? {
+        guard let chatID, !chatID.isEmpty else { return nil }
+        return chatID.hasSuffix("@chatroom")
     }
 
     /// Whether the notification carries any text worth analyzing.
