@@ -767,10 +767,51 @@ final class AppModel: ObservableObject {
 
     /// Adds files to the next question, by reference: they are read where they are.
     func attach(files urls: [URL]) {
-        for url in urls where url.isFileURL {
+        // Only files whose text can be read.
+        for url in urls where url.isFileURL && FileTextExtractor.canExtract(url) {
             let attachment = ChatAttachment.file(path: url.path)
-            if !pendingAttachments.contains(attachment) { pendingAttachments.append(attachment) }
+            guard !pendingAttachments.contains(attachment) else { continue }
+            pendingAttachments.append(attachment)
+            // Read ahead, so the input can tell when only part of the file will be sent.
+            Task { _ = try? await fileText(at: url.path) }
         }
+    }
+
+    /// How a waiting file will be sent: files share the budget of the configured model, and a
+    /// file larger than its share is paged or cut. Nil until the file has been read.
+    func delivery(ofPending path: String) -> FileDelivery? {
+        let paths = pendingAttachments.compactMap { $0.kind == .file ? $0.path : nil }
+        guard let index = paths.firstIndex(of: path), let content = fileTextsRead[path] else { return nil }
+        let lengths = paths.map { fileTextsRead[$0]?.text.count ?? 0 }
+        let share = ContextBudget.allocate(lengths, total: settings.provider.contextBudget.attachments)[index]
+        if content.text.count <= share && !content.truncated { return .whole }
+        guard canPageFiles else { return .truncated(characters: min(share, content.text.count)) }
+        return .paged(sections: sections(of: path)?.count ?? 0)
+    }
+
+    /// Whether the configured model can read further sections of long files (it calls tools).
+    private var canPageFiles: Bool { settings.provider.apiProtocol == .openAICompatible }
+
+    /// Long files' sections, by path, made once.
+    private var sectionCache: [String: DocumentSections] = [:]
+
+    private func sections(of path: String) -> DocumentSections? {
+        if let cached = sectionCache[path] { return cached }
+        guard let content = fileTextsRead[path] else { return nil }
+        let document = DocumentSections(text: content.text)
+        sectionCache[path] = document
+        return document
+    }
+
+    /// Long files of the current conversation the model may read further, by name; newer files
+    /// win when two share a name.
+    private func pageableFiles(in turns: [ChatTurn], plus paged: [String: Int]) -> [String: DocumentSections] {
+        var files: [String: DocumentSections] = [:]
+        let paths = turns.flatMap { Array($0.pagedFiles.keys) } + Array(paged.keys)
+        for path in paths {
+            if let document = sections(of: path) { files[(path as NSString).lastPathComponent] = document }
+        }
+        return files
     }
 
     /// Saves a pasted image (it has no file of its own) and adds it to the next question.
@@ -792,15 +833,23 @@ final class AppModel: ObservableObject {
     }
 
     /// Opens the question page on a fresh conversation about a file or a message.
+    /// A new conversation about files chosen elsewhere, e.g. from Finder's right-click menu.
+    func startChat(aboutFiles urls: [URL]) {
+        currentChatID = nil
+        pendingAttachments = []
+        attach(files: urls)
+        route = .ask
+    }
+
     func startChat(about attachment: ChatAttachment) {
         currentChatID = nil
         pendingAttachments = [attachment]
         route = .ask
     }
 
-    /// The item as something to ask about: its file, or the message and its chat.
+    /// The item as something to ask about: its file if readable, or the message and its chat.
     func attachment(for item: ActionItem) -> ChatAttachment {
-        if let path = item.attachmentPath { return .file(path: path) }
+        if let path = item.attachmentPath, FileTextExtractor.canExtract(URL(fileURLWithPath: path)) { return .file(path: path) }
         return .message(title: item.summary, appID: item.appID, conversation: item.sourceTitle,
                         excerpt: item.sourceExcerpt.isEmpty ? item.summary : item.sourceExcerpt)
     }
@@ -809,16 +858,30 @@ final class AppModel: ObservableObject {
         pendingAttachments.removeAll { $0 == attachment }
     }
 
-    /// Reads attachments into text: a file's contents, or a message with its recent chat.
-    private func read(_ attachments: [ChatAttachment]) async -> [Assistant.Attachment] {
+    /// Reads attachments into text: a file's contents, or a message with its recent chat. Files
+    /// share `budget` characters; how each was sent is returned by path.
+    private func read(_ attachments: [ChatAttachment], budget: Int,
+                      canPage: Bool) async -> ([Assistant.Attachment], [String: FileDelivery]) {
+        var contents: [String: FileTextExtractor.Content] = [:]
+        for path in attachments.compactMap({ $0.kind == .file ? $0.path : nil }) {
+            contents[path] = try? await fileText(at: path)
+        }
+        let paths = Array(contents.keys)
+        let shares = Dictionary(uniqueKeysWithValues: zip(paths, ContextBudget.allocate(paths.map { contents[$0]!.text.count },
+                                                                                      total: budget)))
         var result: [Assistant.Attachment] = []
+        var deliveries: [String: FileDelivery] = [:]
         for attachment in attachments {
             switch attachment.kind {
             case .file:
                 guard let path = attachment.path else { continue }
                 do {
                     let content = try await fileText(at: path)
-                    result.append(.init(title: attachment.title, text: content.text, truncated: content.truncated))
+                    let (sent, delivery) = Assistant.fileAttachment(title: attachment.title, text: content.text,
+                                                                    extractionCut: content.truncated,
+                                                                    share: shares[path] ?? 0, canPage: canPage)
+                    result.append(sent)
+                    deliveries[path] = delivery
                 } catch {
                     result.append(.init(title: attachment.title, text: "（\(error.localizedDescription)）"))
                 }
@@ -831,18 +894,23 @@ final class AppModel: ObservableObject {
                 result.append(.init(title: attachment.title, text: text))
             }
         }
-        return result
+        return (result, deliveries)
     }
 
-    /// Text of a file, read once and kept for follow-up questions. Reading runs off the main thread.
-    private var fileTexts: [String: FileTextExtractor.Content] = [:]
+    /// Text of files, read once and kept for follow-up questions.
+    @Published private var fileTextsRead: [String: FileTextExtractor.Content] = [:]
+    private var fileTextTasks: [String: Task<FileTextExtractor.Content, Error>] = [:]
 
+    /// Reads off the main thread; a file asked for again while being read is read once.
     private func fileText(at path: String) async throws -> FileTextExtractor.Content {
-        if let cached = fileTexts[path] { return cached }
-        let content = try await Task.detached(priority: .userInitiated) {
+        if let cached = fileTextsRead[path] { return cached }
+        let task = fileTextTasks[path] ?? Task.detached(priority: .userInitiated) {
             try FileTextExtractor.extract(from: URL(fileURLWithPath: path))
-        }.value
-        fileTexts[path] = content
+        }
+        fileTextTasks[path] = task
+        defer { fileTextTasks[path] = nil }
+        let content = try await task.value
+        fileTextsRead[path] = content
         return content
     }
 
@@ -860,7 +928,8 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             do {
                 let content = try await fileText(at: path)
-                let stream = assistant.summarizeFile(named: (path as NSString).lastPathComponent, content: content)
+                let stream = assistant.summarizeFile(named: (path as NSString).lastPathComponent, content: content,
+                                                     partSize: min(20_000, settings.provider.contextBudget.attachments))
                 await Self.consume(stream) { self.fileSummaries[path] = $0 }
             } catch {
                 fileSummaries[path] = .text(error.localizedDescription, done: true)
@@ -908,6 +977,8 @@ final class AppModel: ObservableObject {
             : nil
         let assistant = Assistant(provider: configuration.makeProvider(apiKey: key, webSearch: native),
                                   userNames: settings.userNameList)
+        let budget = configuration.contextBudget
+        let canPage = canPageFiles
 
         let attachments = pendingAttachments
         pendingAttachments = []
@@ -950,12 +1021,27 @@ final class AppModel: ObservableObject {
         answerTask = Task { [weak self] in
             var text = ""
             do {
-                let read = await self?.read(attachments) ?? []
+                let (read, deliveries) = await self?.read(attachments, budget: budget.attachments, canPage: canPage) ?? ([], [:])
                 let preamble = Assistant.preamble(attachments: read, newMessages: newMessages, earlier: earlier, appName: appName)
-                self?.updateTurn(turnID) { $0.preamble = preamble }
+                var partial: [String: Int] = [:]
+                var paged: [String: Int] = [:]
+                for (path, delivery) in deliveries {
+                    switch delivery {
+                    case .whole: break
+                    case .paged(let sections): paged[path] = sections
+                    case .truncated(let characters): partial[path] = characters
+                    }
+                }
+                self?.updateTurn(turnID) {
+                    $0.preamble = preamble
+                    $0.partialFiles = partial
+                    $0.pagedFiles = paged
+                }
                 var sent = turn
                 sent.preamble = preamble
-                let stream = assistant.converse(sent, history: history, context: context, search: search, nativeSearch: native)
+                let files = canPage ? self?.pageableFiles(in: history, plus: paged) ?? [:] : [:]
+                let stream = assistant.converse(sent, history: history, context: context, search: search, nativeSearch: native,
+                                                budget: budget, files: files)
                 for try await event in stream {
                     switch event {
                     case .searching(let query):
@@ -964,6 +1050,8 @@ final class AppModel: ObservableObject {
                         text += piece
                         let cleaned = Assistant.clean(text)
                         self?.updateTurn(turnID) { $0.answer = cleaned }
+                    case .reading(let label):
+                        self?.updateTurn(turnID) { $0.reads.append(label) }
                     case .usage(let usage):
                         log.info("Question used \(usage.promptTokens) prompt tokens, \(usage.cachedTokens) from cache")
                     }

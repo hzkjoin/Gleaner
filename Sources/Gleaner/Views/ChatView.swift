@@ -1,5 +1,6 @@
 import GleanerCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Conversations with the assistant: the current one, or the list of earlier ones.
 struct ChatView: View {
@@ -131,7 +132,10 @@ private struct ChatThread: View {
     private var input: some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(model.currentAttachments, id: \.self) { attachment in
-                AttachmentChip(attachment: attachment) { model.removeAttachment(attachment) }
+                AttachmentChip(attachment: attachment,
+                               delivery: attachment.path.flatMap { model.delivery(ofPending: $0) }) {
+                    model.removeAttachment(attachment)
+                }
             }
             field
         }
@@ -166,6 +170,7 @@ private struct ChatThread: View {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
+        panel.allowedContentTypes = ReadableFileTypes.all.compactMap { UTType(filenameExtension: $0) }
         // Above the menu bar panel, which floats at status bar level.
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
         NSApp.activate()
@@ -221,6 +226,35 @@ private struct TurnView: View {
     let turn: ChatTurn
     let answering: Bool
 
+    private func delivery(of attachment: ChatAttachment) -> FileDelivery? {
+        guard let path = attachment.path else { return nil }
+        if let sections = turn.pagedFiles[path] { return .paged(sections: sections) }
+        if let characters = turn.partialFiles[path] { return .truncated(characters: characters) }
+        return nil
+    }
+
+    /// "报告.pdf 搜索「预算」，报告.pdf 第 3、5 段", from reads like "报告.pdf 第 3 段"; sections of
+    /// one file are put together.
+    static func readsLine(_ reads: [String]) -> String {
+        var order: [String] = []
+        var sections: [String: [String]] = [:]
+        for read in reads {
+            guard read.hasSuffix(" 段"), let range = read.range(of: " 第 ", options: .backwards) else {
+                order.append(read)
+                continue
+            }
+            let file = String(read[..<range.lowerBound])
+            let number = read[range.upperBound...].replacingOccurrences(of: " 段", with: "")
+            if sections[file] == nil { order.append("\u{1}" + file) }
+            sections[file, default: []].append(number)
+        }
+        return order.map { entry in
+            guard entry.hasPrefix("\u{1}") else { return entry }
+            let file = String(entry.dropFirst())
+            return "\(file) 第 \(sections[file]!.joined(separator: "、")) 段"
+        }.joined(separator: "，")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !turn.attachments.isEmpty {
@@ -228,7 +262,7 @@ private struct TurnView: View {
                     Spacer(minLength: 48)
                     VStack(alignment: .trailing, spacing: 6) {
                         ForEach(turn.attachments, id: \.self) { attachment in
-                            SentAttachment(attachment: attachment)
+                            SentAttachment(attachment: attachment, delivery: delivery(of: attachment))
                         }
                     }
                 }
@@ -242,6 +276,14 @@ private struct TurnView: View {
                     .padding(.horizontal, 11)
                     .padding(.vertical, 7)
                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.ink))
+            }
+            if !turn.reads.isEmpty {
+                Label(Self.readsLine(turn.reads), systemImage: "doc.text.magnifyingglass")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.leading, 2)
             }
             if !turn.searches.isEmpty {
                 // One quiet line, however many searches were made.
@@ -330,6 +372,7 @@ private struct ChatRow: View {
 /// A file or message waiting to be sent, with a way to drop it.
 private struct AttachmentChip: View {
     let attachment: ChatAttachment
+    let delivery: FileDelivery?
     let remove: () -> Void
 
     static func label(for attachment: ChatAttachment) -> String {
@@ -347,6 +390,7 @@ private struct AttachmentChip: View {
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+            if let delivery { DeliveryNote(delivery: delivery) }
             IconButton(symbol: "xmark", help: "去掉", action: remove)
                 .padding(.vertical, -6)
         }
@@ -361,6 +405,7 @@ private struct AttachmentChip: View {
 /// Clicking a file opens it.
 private struct SentAttachment: View {
     let attachment: ChatAttachment
+    let delivery: FileDelivery?
 
     private var image: NSImage? {
         guard attachment.kind == .file, let path = attachment.path,
@@ -385,6 +430,7 @@ private struct SentAttachment: View {
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    if let delivery { DeliveryNote(delivery: delivery) }
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
@@ -397,6 +443,35 @@ private struct SentAttachment: View {
             NSWorkspace.shared.open(URL(fileURLWithPath: path))
             PanelDismissal.dismiss()
         }
+    }
+}
+
+/// "只读前 2 万字" for a file the model gets only the start of. Nothing for files sent whole or
+/// read section by section as needed.
+private struct DeliveryNote: View {
+    let delivery: FileDelivery
+
+    var body: some View {
+        switch delivery {
+        case .whole, .paged:
+            EmptyView()
+        case .truncated(let characters):
+            note("只读前 \(Self.amount(characters))字")
+        }
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(Theme.textTertiary)
+            .fixedSize()
+    }
+
+    /// "8000 ", "1.2 万", "2 万".
+    static func amount(_ length: Int) -> String {
+        guard length >= 10_000 else { return "\(length / 100 * 100) " }
+        let tenThousands = (Double(length) / 10_000 * 10).rounded(.down) / 10
+        return tenThousands == tenThousands.rounded() ? "\(Int(tenThousands)) 万" : "\(tenThousands) 万"
     }
 }
 

@@ -54,6 +54,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar = MenuBarController(model: model)
         _ = Updater.shared
         UNUserNotificationCenter.current().delegate = self
+        askAboutPendingFiles()
+    }
+
+    /// `gleaner://ask?file=<path>&file=<path>`, from the Finder extension: ask about those files.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.scheme == "gleaner" && url.host == "ask" {
+            let files = (URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? [])
+                .filter { $0.name == "file" }.compactMap(\.value).map { URL(fileURLWithPath: $0) }
+                .filter { FileManager.default.fileExists(atPath: $0.path) }
+            guard !files.isEmpty else { continue }
+            pendingFiles = files
+        }
+        askAboutPendingFiles()
+    }
+
+    /// Files to ask about, kept when they arrive while the app is still launching.
+    private var pendingFiles: [URL] = []
+
+    private func askAboutPendingFiles() {
+        guard !pendingFiles.isEmpty, let model, let menuBar else { return }
+        model.startChat(aboutFiles: pendingFiles)
+        pendingFiles = []
+        // Right after launch the menu bar item has no place on screen yet; give it a moment.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { menuBar.open() }
     }
 }
 

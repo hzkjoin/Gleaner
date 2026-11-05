@@ -32,6 +32,13 @@ public struct ToolCall: Sendable, Hashable, Codable {
         guard let json = try? JSONSerialization.jsonObject(with: Data(arguments.utf8)) as? [String: Any] else { return nil }
         return json[key] as? String
     }
+
+    /// One whole-number argument; models sometimes write it as a string.
+    public func integer(_ key: String) -> Int? {
+        guard let json = try? JSONSerialization.jsonObject(with: Data(arguments.utf8)) as? [String: Any] else { return nil }
+        if let number = json[key] as? NSNumber { return number.intValue }
+        return (json[key] as? String).flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+    }
 }
 
 /// One message of a multi-turn exchange.

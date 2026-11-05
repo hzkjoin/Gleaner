@@ -1,4 +1,5 @@
 import GleanerCore
+import FinderSync
 import SwiftUI
 
 /// Settings, shown in place of the item list. Edits apply only when saved.
@@ -8,6 +9,7 @@ struct SettingsView: View {
     @State private var launchAtLogin = LoginItem.state
 
     @State private var draft = AppSettings()
+    @State private var finderMenuEnabled = FIFinderSyncController.isExtensionEnabled
     @State private var apiKey = ""
     @State private var searchKeys: [WebSearchChannel: String] = [:]
     @State private var editingSearchKey: Set<WebSearchChannel> = []
@@ -146,6 +148,21 @@ struct SettingsView: View {
             Toggle("自动复制验证码", isOn: $draft.autoCopyCodes)
             Toggle("建议回复", isOn: $draft.suggestReplies)
             Toggle("日程建议", isOn: $draft.scheduleSuggestions)
+            LabeledContent("访达右键「问问拾穗」") {
+                if finderMenuEnabled {
+                    Text("已开启").foregroundStyle(Theme.textTertiary)
+                } else {
+                    Button("开启") { FIFinderSyncController.showExtensionManagementInterface() }
+                        .buttonStyle(PillButtonStyle())
+                }
+            }
+        }
+        .task {
+            // The extension is turned on in System Settings; notice it while this page is open.
+            while !Task.isCancelled {
+                finderMenuEnabled = FIFinderSyncController.isExtensionEnabled
+                try? await Task.sleep(for: .seconds(1))
+            }
         }
     }
 
@@ -335,6 +352,17 @@ struct SettingsView: View {
             }
             TextField("接口地址", text: $draft.provider.baseURL, prompt: Text("https://api.example.com/v1"))
             TextField("模型", text: $draft.provider.model, prompt: Text("模型名称"))
+            LabeledContent("上下文长度") {
+                HStack(spacing: 4) {
+                    TextField("", text: Binding(
+                        get: { draft.provider.contextK.map(String.init) ?? "" },
+                        set: { draft.provider.contextK = Int($0.filter(\.isNumber)).flatMap { $0 > 0 ? $0 : nil } }
+                    ), prompt: Text("\(draft.provider.estimatedContextK)"))
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 64)
+                    Text("K").foregroundStyle(Theme.textSecondary)
+                }
+            }
             apiKeyRow
             if draft.provider.apiProtocol == .openAICompatible && draft.provider.isLocal {
                 Toggle(isOn: $draft.provider.reasoning) {

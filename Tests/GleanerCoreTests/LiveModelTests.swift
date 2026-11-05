@@ -172,7 +172,7 @@ struct LiveConversationTests {
             switch event {
             case .searching(let query): searches.append(query)
             case .text(let piece): answer += piece
-            case .usage: break
+            case .usage, .reading: break
             }
         }
         print("Searches:", searches, "seconds:", Int(Date().timeIntervalSince(start)))
@@ -316,5 +316,43 @@ struct LiveMailCodeTests {
         for item in items { print("\(item.sourceIDs) \(item.kind.rawValue) code=\(item.verificationCode ?? "-") | \(item.summary)") }
         #expect(items.first { $0.sourceIDs.contains("c") }?.verificationCode == "583027")
         #expect(items.filter { $0.sourceIDs.contains("s") }.allSatisfy { $0.kind != .code })
+    }
+}
+
+@Suite("Live file paging", .enabled(if: LiveModel.configuration != nil))
+struct LiveFilePagingTests {
+    /// A long report whose answer sits in a section the model isn't given at first.
+    @Test func readsTheSectionThatHoldsTheAnswer() async throws {
+        let configuration = try #require(LiveModel.configuration)
+        let filler = String(repeating: "本章介绍项目背景、团队分工与例行事项，没有具体数字。", count: 300)
+        let chapters = (1...10).map { index -> String in
+            let fact = index == 7 ? "本季度服务器采购预算为 368 万元，由财务部周敏负责审批。\n" : ""
+            let title = index == 7 ? "采购预算" : "例行说明"
+            return "第\(index)章 \(title)\n\(fact)\(filler)"
+        }
+        let text = chapters.joined(separator: "\n")
+        let (attachment, delivery) = Assistant.fileAttachment(title: "季度报告.docx", text: text, extractionCut: false,
+                                                              share: 20_000, canPage: true)
+        guard case .paged = delivery else { Issue.record("expected paging"); return }
+        let preamble = Assistant.preamble(attachments: [attachment], appName: { $0 })
+        let assistant = Assistant(provider: configuration.makeProvider(apiKey: LiveModel.apiKey))
+        let context = assistant.conversationContext(messages: [], openItems: [], canSearch: false, appName: { $0 })
+        var reads: [String] = []
+        var answer = ""
+        let start = Date()
+        for try await event in assistant.converse(ChatTurn(question: "服务器采购预算是多少？谁审批？", preamble: preamble),
+                                                  history: [], context: context, search: nil,
+                                                  files: ["季度报告.docx": DocumentSections(text: text)]) {
+            switch event {
+            case .reading(let label): reads.append(label)
+            case .text(let piece): answer += piece
+            default: break
+            }
+        }
+        print("Reads:", reads, "seconds:", Int(Date().timeIntervalSince(start)))
+        print("Answer:", Assistant.clean(answer))
+        #expect(!reads.isEmpty)
+        #expect(answer.contains("368"))
+        #expect(answer.contains("周敏"))
     }
 }

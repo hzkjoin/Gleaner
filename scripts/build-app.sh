@@ -30,6 +30,20 @@ cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 # Localized display names: "拾穗" in Chinese, "Gleaner" in English.
 cp -R "$ROOT/Resources/"*.lproj "$APP/Contents/Resources/"
 
+# The Finder extension (问问拾穗 in the right-click menu), built on its own: app extensions
+# need their own entry point, which SwiftPM doesn't offer.
+APPEX="$APP/Contents/PlugIns/FinderMenu.appex"
+mkdir -p "$APPEX/Contents/MacOS"
+OPT="-O"; [[ "$CONFIG" == "debug" ]] && OPT="-Onone"
+xcrun swiftc $OPT -module-name FinderMenu -target "$(uname -m)-apple-macos14.0" -application-extension \
+    -Xlinker -e -Xlinker _NSExtensionMain -framework FinderSync \
+    "$ROOT/Extensions/FinderMenu/FinderMenu.swift" "$ROOT/Sources/GleanerCore/Files/ReadableFileTypes.swift" \
+    -o "$APPEX/Contents/MacOS/FinderMenu"
+cp "$ROOT/Extensions/FinderMenu/Info.plist" "$APPEX/Contents/Info.plist"
+for key in CFBundleShortVersionString CFBundleVersion; do
+    /usr/libexec/PlistBuddy -c "Set :$key $(/usr/libexec/PlistBuddy -c "Print :$key" "$APP/Contents/Info.plist")" "$APPEX/Contents/Info.plist"
+done
+
 IDENTITY="${GLEANER_SIGN_IDENTITY:-}"
 if [[ -z "$IDENTITY" ]]; then
     # Lines look like:  1) <SHA-1> "Apple Development: Name (TEAMID)"
@@ -47,10 +61,14 @@ if [[ -n "$IDENTITY" ]]; then
     for part in "$SPARKLE"/XPCServices/*.xpc "$SPARKLE/Autoupdate" "$SPARKLE/Updater.app" "$APP/Contents/Frameworks/Sparkle.framework"; do
         [[ -e "$part" ]] && codesign --force --timestamp=none --sign "$IDENTITY" "$part"
     done
+    # Finder only loads sandboxed extensions.
+    codesign --force --timestamp=none --sign "$IDENTITY" --entitlements "$ROOT/Extensions/FinderMenu/FinderMenu.entitlements" "$APPEX"
     codesign --force --timestamp=none --sign "$IDENTITY" "$APP"
     echo "Signed with $(codesign -dvv "$APP" 2>&1 | awk -F= '/^Authority=/ { print $2; exit }')"
 else
     codesign --force --deep --sign - "$APP"
+    codesign --force --sign - --entitlements "$ROOT/Extensions/FinderMenu/FinderMenu.entitlements" "$APPEX"
+    codesign --force --sign - "$APP"
     echo "Signed ad-hoc (no signing identity found; privacy permissions reset with every build)"
 fi
 

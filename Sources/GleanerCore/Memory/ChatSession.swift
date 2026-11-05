@@ -15,9 +15,16 @@ public struct ChatTurn: Codable, Identifiable, Hashable, Sendable {
     /// Material sent ahead of the question (attachment text, new and older messages), kept as sent
     /// so later requests repeat it exactly and hit the provider's prompt cache.
     public var preamble: String
+    /// Files only partly sent, by path: how many characters went to the model.
+    public var partialFiles: [String: Int]
+    /// Long files sent as a start and an outline, by path: how many sections they have.
+    public var pagedFiles: [String: Int]
+    /// File sections the model read while answering, as "报告.pdf 第 5 段".
+    public var reads: [String]
 
     public init(id: UUID = UUID(), question: String, answer: String = "", searches: [String] = [], date: Date = Date(),
-                failed: Bool = false, attachments: [ChatAttachment] = [], preamble: String = "") {
+                failed: Bool = false, attachments: [ChatAttachment] = [], preamble: String = "",
+                partialFiles: [String: Int] = [:], pagedFiles: [String: Int] = [:], reads: [String] = []) {
         self.id = id
         self.question = question
         self.answer = answer
@@ -26,9 +33,14 @@ public struct ChatTurn: Codable, Identifiable, Hashable, Sendable {
         self.failed = failed
         self.attachments = attachments
         self.preamble = preamble
+        self.partialFiles = partialFiles
+        self.pagedFiles = pagedFiles
+        self.reads = reads
     }
 
-    private enum CodingKeys: String, CodingKey { case id, question, answer, searches, date, failed, attachments, preamble }
+    private enum CodingKeys: String, CodingKey {
+        case id, question, answer, searches, date, failed, attachments, preamble, partialFiles, pagedFiles, reads
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -40,11 +52,19 @@ public struct ChatTurn: Codable, Identifiable, Hashable, Sendable {
         failed = try c.decodeIfPresent(Bool.self, forKey: .failed) ?? false
         attachments = try c.decodeIfPresent([ChatAttachment].self, forKey: .attachments) ?? []
         preamble = try c.decodeIfPresent(String.self, forKey: .preamble) ?? ""
+        partialFiles = try c.decodeIfPresent([String: Int].self, forKey: .partialFiles) ?? [:]
+        pagedFiles = try c.decodeIfPresent([String: Int].self, forKey: .pagedFiles) ?? [:]
+        reads = try c.decodeIfPresent([String].self, forKey: .reads) ?? []
     }
 
     /// The user message as sent: the preamble, then the question.
     public var message: String {
         preamble.isEmpty ? question : "\(preamble)\n\n问题：\(question)"
+    }
+
+    /// The message without its preamble, for when a long conversation must make room.
+    public var shortMessage: String {
+        preamble.isEmpty ? question : "（这一轮附带的文件和消息已省略）\n\n问题：\(question)"
     }
 }
 

@@ -23,15 +23,18 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     /// Let the model think before answering. More accurate, slower. OpenAI-compatible endpoints only;
     /// Anthropic models always use adaptive thinking at low effort.
     public var reasoning: Bool
+    /// The model's context length in thousands of tokens, as the user set it; nil to estimate.
+    public var contextK: Int?
 
-    public init(apiProtocol: APIProtocol, baseURL: String, model: String, reasoning: Bool = true) {
+    public init(apiProtocol: APIProtocol, baseURL: String, model: String, reasoning: Bool = true, contextK: Int? = nil) {
         self.apiProtocol = apiProtocol
         self.baseURL = baseURL
         self.model = model
         self.reasoning = reasoning
+        self.contextK = contextK
     }
 
-    private enum CodingKeys: String, CodingKey { case apiProtocol, baseURL, model, reasoning }
+    private enum CodingKeys: String, CodingKey { case apiProtocol, baseURL, model, reasoning, contextK }
 
     /// Tolerates configurations saved before `reasoning` existed.
     public init(from decoder: Decoder) throws {
@@ -40,7 +43,8 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
             apiProtocol: try c.decode(APIProtocol.self, forKey: .apiProtocol),
             baseURL: try c.decode(String.self, forKey: .baseURL),
             model: try c.decode(String.self, forKey: .model),
-            reasoning: try c.decodeIfPresent(Bool.self, forKey: .reasoning) ?? true
+            reasoning: try c.decodeIfPresent(Bool.self, forKey: .reasoning) ?? true,
+            contextK: try c.decodeIfPresent(Int.self, forKey: .contextK)
         )
     }
 

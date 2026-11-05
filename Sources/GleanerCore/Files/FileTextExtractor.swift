@@ -31,19 +31,17 @@ public enum FileTextExtractor {
         }
     }
 
-    static let plainText: Set<String> = ["txt", "md", "markdown", "csv", "tsv", "json", "log", "xml", "yaml", "yml"]
-    /// Formats `textutil` converts.
-    static let documents: Set<String> = ["doc", "docx", "rtf", "rtfd", "odt", "html", "htm", "webarchive", "wordml"]
-    public static let images: Set<String> = ["png", "jpg", "jpeg", "heic", "gif", "bmp", "tif", "tiff", "webp"]
+    static let plainText = ReadableFileTypes.plainText
+    static let documents = ReadableFileTypes.documents
+    public static let images = ReadableFileTypes.images
 
-    public static func canExtract(_ url: URL) -> Bool {
-        let ext = url.pathExtension.lowercased()
-        return plainText.contains(ext) || documents.contains(ext) || images.contains(ext)
-            || ["pdf", "xlsx", "pptx"].contains(ext)
-    }
+    public static func canExtract(_ url: URL) -> Bool { ReadableFileTypes.contains(url) }
+
+    /// Most of a file that is ever read, about 150 sections.
+    public static let limit = 1_200_000
 
     /// Text of the file, cut to `limit` characters. Slow for scanned documents and images.
-    public static func extract(from url: URL, limit: Int = 20_000) throws -> Content {
+    public static func extract(from url: URL, limit: Int = FileTextExtractor.limit) throws -> Content {
         guard FileManager.default.isReadableFile(atPath: url.path) else { throw Failure.unreadable }
         let ext = url.pathExtension.lowercased()
         let raw: String
@@ -78,7 +76,7 @@ public enum FileTextExtractor {
         return String(data: data, encoding: gb18030) ?? String(decoding: data, as: UTF8.self)
     }
 
-    /// The text layer; pages without one (scans) go through text recognition, up to 10 pages.
+    /// The text layer; pages without one (scans) go through text recognition, up to 50 pages.
     static func readPDF(_ url: URL) throws -> String {
         guard let document = PDFDocument(url: url) else { throw Failure.unreadable }
         var pages: [String] = []
@@ -86,7 +84,7 @@ public enum FileTextExtractor {
         for index in 0..<document.pageCount {
             guard let page = document.page(at: index) else { continue }
             var text = page.string ?? ""
-            if text.trimmingCharacters(in: .whitespacesAndNewlines).count < 10, recognized < 10 {
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).count < 10, recognized < 50 {
                 recognized += 1
                 let bounds = page.bounds(for: .mediaBox)
                 let image = page.thumbnail(of: NSSize(width: bounds.width * 2, height: bounds.height * 2), for: .mediaBox)
