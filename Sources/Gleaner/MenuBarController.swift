@@ -34,6 +34,7 @@ final class MenuBarController: NSObject {
         updateTitle()
         // Coalesce bursts of model changes into one title update.
         model.objectWillChange
+            .merge(with: Updater.shared.objectWillChange)
             .debounce(for: .milliseconds(50), scheduler: RunLoop.main)
             .sink { [weak self] _ in self?.updateTitle() }
             .store(in: &cancellables)
@@ -99,7 +100,20 @@ final class MenuBarController: NSObject {
     }
 
     private func updateTitle() {
-        statusItem.button?.title = MenuBarLabel.title(for: model)
+        let title = MenuBarLabel.title(for: model)
+        guard Updater.shared.availableVersion != nil else {
+            statusItem.button?.attributedTitle = NSAttributedString(string: "")
+            statusItem.button?.title = title
+            return
+        }
+        // A small dot after the title while an update waits.
+        let text = NSMutableAttributedString(string: title + " ", attributes: [.font: NSFont.menuBarFont(ofSize: 0)])
+        text.append(NSAttributedString(string: "●", attributes: [
+            .font: NSFont.systemFont(ofSize: 7),
+            .foregroundColor: NSColor.systemRed,
+            .baselineOffset: 2,
+        ]))
+        statusItem.button?.attributedTitle = text
     }
 
     /// Closes on a click outside, Escape, or another app coming forward.

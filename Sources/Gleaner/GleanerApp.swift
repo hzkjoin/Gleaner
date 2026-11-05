@@ -1,4 +1,5 @@
 import AppKit
+import UserNotifications
 
 /// Starts the app with AppKit: Gleaner has no windows of its own besides the menu bar panel,
 /// which `MenuBarController` manages, so a SwiftUI `App` would only add an empty scene.
@@ -52,5 +53,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.model = model
         menuBar = MenuBarController(model: model)
         _ = Updater.shared
+        UNUserNotificationCenter.current().delegate = self
+    }
+}
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    /// Clicking a notification: the update one opens the update window; others open the panel.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        let id = response.notification.request.identifier
+        MainActor.assumeIsolated {
+            if id == Updater.notificationID {
+                Updater.shared.checkForUpdates()
+            } else {
+                menuBar?.open()
+            }
+        }
+        completionHandler()
+    }
+
+    /// Show notifications even while Gleaner is the active app.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list])
     }
 }

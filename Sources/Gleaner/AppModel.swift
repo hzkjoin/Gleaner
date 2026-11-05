@@ -126,8 +126,11 @@ final class AppModel: ObservableObject {
     /// Counter-examples passed to the model.
     private let exampleLimit = 20
 
-    init(secrets: SecretStore = KeychainSecretStore(), dataDirectory: URL = AppModel.defaultDataDirectory) {
-        self.secrets = secrets
+    init(secrets: SecretStore? = nil, dataDirectory: URL = AppModel.defaultDataDirectory) {
+        // API keys live in a private file; keys saved in the keychain by earlier versions move over on first use.
+        self.secrets = secrets ?? MigratingSecretStore(
+            primary: FileSecretStore(url: dataDirectory.appendingPathComponent("secrets.json")),
+            legacy: KeychainSecretStore())
         var settings = AppSettings.load()
         let messagesSwitch = SourceSwitch(settings.readMessages)
         let weChatFilesSwitch = SourceSwitch(settings.readWeChatFiles)

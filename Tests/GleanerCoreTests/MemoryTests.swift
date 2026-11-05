@@ -205,3 +205,44 @@ struct ContextReplyTests {
         #expect(archive.origin(ofFileNamed: "没有.docx") == nil)
     }
 }
+
+/// An in-memory store standing in for the keychain.
+final class MemorySecretStore: SecretStore, @unchecked Sendable {
+    var values: [String: String]
+    init(_ values: [String: String] = [:]) { self.values = values }
+    func secret(for account: String) -> String { values[account] ?? "" }
+    func setSecret(_ value: String, for account: String) { values[account] = value.isEmpty ? nil : value }
+}
+
+@Suite struct SecretStoreTests {
+    private func fileStore() -> (FileSecretStore, URL) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("secrets-\(UUID().uuidString)/secrets.json")
+        return (FileSecretStore(url: url), url)
+    }
+
+    @Test func fileStoreIsPrivate() throws {
+        let (store, url) = fileStore()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        store.setSecret("sk-1", for: "api.deepseek.com")
+        #expect(store.secret(for: "api.deepseek.com") == "sk-1")
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        let folder = try FileManager.default.attributesOfItem(atPath: url.deletingLastPathComponent().path)
+        #expect((folder[.posixPermissions] as? NSNumber)?.intValue == 0o700)
+        store.setSecret("", for: "api.deepseek.com")
+        #expect(store.secret(for: "api.deepseek.com") == "")
+    }
+
+    @Test func movesKeysOutOfTheOldStoreOnce() {
+        let (file, url) = fileStore()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let keychain = MemorySecretStore(["api.deepseek.com": "sk-old"])
+        let store = MigratingSecretStore(primary: file, legacy: keychain)
+        #expect(store.secret(for: "api.deepseek.com") == "sk-old")
+        #expect(file.secret(for: "api.deepseek.com") == "sk-old")
+        #expect(keychain.values.isEmpty)
+        store.setSecret("sk-new", for: "search:api.deepseek.com")
+        #expect(file.secret(for: "search:api.deepseek.com") == "sk-new")
+        #expect(store.secret(for: "missing") == "")
+    }
+}

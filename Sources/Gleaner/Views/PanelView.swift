@@ -6,6 +6,7 @@ struct PanelView: View {
     enum Tab { case items, news }
 
     @EnvironmentObject private var model: AppModel
+    @ObservedObject private var updater = Updater.shared
     @State private var tab: Tab = .items
 
     var body: some View {
@@ -59,9 +60,17 @@ struct PanelView: View {
                 Text("拾穗")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
-                Text(subtitle)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.textSecondary)
+                HStack(spacing: 8) {
+                    Text(subtitle)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.textSecondary)
+                    if let version = updater.availableVersion {
+                        Button("新版本 \(version)") { updater.checkForUpdates() }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(Theme.textPrimary)
+                    }
+                }
             }
             Spacer()
             StatusPill(status: model.status, focusMode: model.focusMode) { model.checkNow() }
