@@ -21,6 +21,11 @@ struct PanelView: View {
             case .main:
                 VStack(spacing: 0) {
                     header
+                    if let version = updater.availableVersion {
+                        UpdateBanner(version: version) { updater.checkForUpdates() }
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, 10)
+                    }
                     if showsTabs {
                         HStack {
                             SegmentedTabs(selection: $tab, tabs: [
@@ -60,17 +65,9 @@ struct PanelView: View {
                 Text("拾穗")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
-                HStack(spacing: 8) {
-                    Text(subtitle)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Theme.textSecondary)
-                    if let version = updater.availableVersion {
-                        Button("新版本 \(version)") { updater.checkForUpdates() }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 11.5, weight: .medium))
-                            .foregroundStyle(Theme.textPrimary)
-                    }
-                }
+                Text(subtitle)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.textSecondary)
             }
             Spacer()
             StatusPill(status: model.status, focusMode: model.focusMode) { model.checkNow() }
@@ -374,5 +371,31 @@ private struct AskButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+}
+
+/// A newer version is out: a plain line with a clear button.
+private struct UpdateBanner: View {
+    let version: String
+    let update: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.down.circle")
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.textSecondary)
+            Text("检测到新版本 v\(version)")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+            Spacer(minLength: 4)
+            Button("立即更新", action: update)
+                .buttonStyle(PillButtonStyle(prominent: true))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).fill(Theme.card)
+            .shadow(color: .black.opacity(0.04), radius: 1.5, y: 1))
+        .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+            .strokeBorder(Theme.cardStroke, lineWidth: 0.5))
     }
 }

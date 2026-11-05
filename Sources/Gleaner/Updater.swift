@@ -63,10 +63,12 @@ final class Updater: NSObject, ObservableObject {
 extension Updater: SPUStandardUserDriverDelegate {
     nonisolated var supportsGentleScheduledUpdateReminders: Bool { true }
 
-    /// Let Sparkle show its window only when Gleaner is already in front; otherwise remind gently.
+    /// Let Sparkle show its window only when Gleaner is actually in front; otherwise remind gently.
+    /// Sparkle counts an update found right after launch as in focus, but Gleaner launches at
+    /// login, when nobody is looking at it.
     nonisolated func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem,
                                                                           andInImmediateFocus immediateFocus: Bool) -> Bool {
-        immediateFocus
+        immediateFocus && MainActor.assumeIsolated { NSApp.isActive }
     }
 
     nonisolated func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem,

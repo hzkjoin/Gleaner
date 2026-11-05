@@ -23,7 +23,9 @@ public struct NotificationFilter: Sendable {
 
     public init(ignoredApps: Set<String> = [], mutedConversations: Set<ConversationKey> = [],
                 rules: [UserRule] = [], appName: @escaping @Sendable (String) -> String = { $0 }) {
-        self.ignoredApps = ignoredApps
+        // App identifiers differ in case between sources (the notification database lowercases
+        // them), so they're compared lowercased.
+        self.ignoredApps = Set(ignoredApps.map { $0.lowercased() })
         self.mutedConversations = mutedConversations
         self.rules = rules
         self.appName = appName
@@ -31,7 +33,7 @@ public struct NotificationFilter: Sendable {
 
     /// Why `notification` is filtered out, or nil when it is allowed.
     public func skipReason(for notification: AppNotification) -> ActivityRecord.SkipReason? {
-        if ignoredApps.contains(notification.appID) { return .ignoredApp }
+        if ignoredApps.contains(notification.appID.lowercased()) { return .ignoredApp }
         if mutedConversations.contains(ConversationKey(appID: notification.appID, title: notification.title)) {
             return .mutedConversation
         }
@@ -51,7 +53,7 @@ public struct NotificationFilter: Sendable {
     }
 
     public func allows(_ item: ActionItem) -> Bool {
-        !ignoredApps.contains(item.appID)
+        !ignoredApps.contains(item.appID.lowercased())
             && !mutedConversations.contains(ConversationKey(appID: item.appID, title: item.sourceTitle))
     }
 }

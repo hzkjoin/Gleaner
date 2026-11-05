@@ -109,3 +109,13 @@ struct NotificationFilterTests {
         #expect(!ExtractionPrompt.system(userNames: []).contains("不相关】"))
     }
 }
+
+@Suite struct FilterCaseTests {
+    @Test func ignoredAppsMatchWhateverTheCase() {
+        let filter = NotificationFilter(ignoredApps: ["app.gleaner.Gleaner"])
+        let own = AppNotification(id: "1", appID: "app.gleaner.gleaner", title: "拾穗", body: "拾穗 0.1.2 可以更新了", date: Date())
+        #expect(!filter.allows(own))
+        let item = ActionItem(summary: "s", appID: "APP.GLEANER.GLEANER", sourceTitle: "", sourceExcerpt: "", notificationDate: Date())
+        #expect(!filter.allows(item))
+    }
+}
