@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Wrapper around `swift` that lets the project build with only the Command Line Tools.
+#
+# Starting with the macOS 27 SDK, SwiftUI's `@State` is implemented as a macro whose
+# compiler plugin (SwiftUIMacros) ships with Xcode but not with the Command Line
+# Tools. When the active toolchain lacks that plugin and the default SDK needs it,
+# this script selects the newest installed SDK that does not, via SDKROOT.
+# With Xcode installed it simply runs `swift "$@"`.
+#
+# Usage: scripts/swiftw build | test | run ...
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TOOLCHAIN_USR="$(cd "$(dirname "$(xcrun --find swift)")/.." && pwd)"
+
+needs_swiftui_macros() {
+    local iface
+    iface="$(ls "$1"/System/Library/Frameworks/SwiftUICore.framework/Versions/A/Modules/SwiftUICore.swiftmodule/arm64e-apple-macos.swiftinterface 2>/dev/null | head -1)"
+    [[ -n "$iface" ]] && grep -q "public macro State(" "$iface"
+}
+
+has_swiftui_macros_plugin() {
+    find "$TOOLCHAIN_USR/lib/swift/host/plugins" "$TOOLCHAIN_USR/local/lib/swift/host/plugins" \
+        -iname "*SwiftUIMacros*" 2>/dev/null | grep -q .
+}
+
+if [[ -z "${SDKROOT:-}" ]] && ! has_swiftui_macros_plugin; then
+    DEFAULT_SDK="$(xcrun --show-sdk-path)"
+    if needs_swiftui_macros "$DEFAULT_SDK"; then
+        SDK_DIR="$(dirname "$DEFAULT_SDK")"
+        # Newest versioned SDK first, e.g. MacOSX27.2.sdk, MacOSX26.5.sdk, ...
+        for sdk in $(ls -d "$SDK_DIR"/MacOSX[0-9]*.sdk 2>/dev/null | sort -t X -k 2 -V -r); do
+            [[ -L "$sdk" ]] && continue
+            if ! needs_swiftui_macros "$sdk"; then
+                export SDKROOT="$sdk"
+                echo "swiftw: SwiftUI macro plugin not found; building with $(basename "$sdk")" >&2
+                break
+            fi
+        done
+        if [[ -z "${SDKROOT:-}" ]]; then
+            echo "swiftw: no installed SDK works without the SwiftUI macro plugin; please install Xcode." >&2
+            exit 1
+        fi
+    fi
+fi
+
+EXTRA=()
+# The Swift Build backend intermittently omits the swift-testing macro plugin when it
+# resolves plugins for test targets ("plugin for module 'TestingMacros' not found").
+# Pointing the compiler at it explicitly makes `swift test` deterministic.
+TESTING_PLUGINS="$TOOLCHAIN_USR/lib/swift/host/plugins/testing"
+if [[ "${1:-}" == "test" && -d "$TESTING_PLUGINS" ]]; then
+    EXTRA=(-Xswiftc -plugin-path -Xswiftc "$TESTING_PLUGINS")
+fi
+
+cd "$ROOT"
+exec swift "$@" ${EXTRA[@]+"${EXTRA[@]}"}

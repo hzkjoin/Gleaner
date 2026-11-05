@@ -1,0 +1,23 @@
+# SwiftPM
+.build/
+.swiftpm/
+
+# App bundle produced by scripts/build-app.sh
+build/
+
+# Xcode
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Editor settings
+.vscode/
+
+# Sparkle command-line tools, downloaded by hand (see README)
+.tools/
+
+# Notes for AI coding assistants, kept local
+CLAUDE.md
