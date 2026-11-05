@@ -11,6 +11,10 @@ import SQLite3
 /// `lateWindow` are therefore dated no earlier than when they were first seen, so the pipeline
 /// still treats them as new. Older rows that appear (a newly added account bringing its whole
 /// history) are not new mail and are left alone.
+///
+/// Mail adds a message to its index before writing the message file. A message whose text
+/// isn't there yet is held back for up to `bodyWait` (a code in the body matters more than a
+/// few seconds), then dated when it is finally handed over.
 public final class MailSource: NotificationSource, @unchecked Sendable {
     public static let appID = "com.apple.mail"
     public static let defaultDirectory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mail")
@@ -21,12 +25,18 @@ public final class MailSource: NotificationSource, @unchecked Sendable {
     public var bodyLimit: Int
     /// How old a late-downloaded message may be and still count as new.
     public var lateWindow: TimeInterval = 24 * 3600
+    /// How long to wait for a message's text to be written.
+    public var bodyWait: TimeInterval = 120
 
     private let lock = NSLock()
     /// The highest row present when the source first read the index.
     private var baselineRowID: Int64?
     /// When rows added after the baseline were first seen.
     private var firstSeen: [Int64: Date] = [:]
+    /// Rows held back until their text arrives, and since when.
+    private var waiting: [Int64: Date] = [:]
+    /// When rows that were held back were handed over, which dates them.
+    private var released: [Int64: Date] = [:]
 
     public init(directory: URL = MailSource.defaultDirectory, bodyLimit: Int = 800) {
         self.directory = directory
@@ -42,6 +52,8 @@ public final class MailSource: NotificationSource, @unchecked Sendable {
     }
 
     public func changeToken() -> Date? {
+        // Mail writes message files without touching the index; keep looking while waiting for one.
+        if lock.withLock({ !waiting.isEmpty }) { return Date() }
         guard let data = versionDirectory?.appendingPathComponent("MailData") else { return nil }
         return ["Envelope Index", "Envelope Index-wal"].compactMap { name -> Date? in
             (try? FileManager.default.attributesOfItem(atPath: data.appendingPathComponent(name).path))?[.modificationDate] as? Date
@@ -78,13 +90,24 @@ public final class MailSource: NotificationSource, @unchecked Sendable {
                     firstSeen[row.rowID] = seen
                     effective = max(row.received, seen)
                 }
-                guard effective > date else { continue }
                 let body = Self.bodyText(for: row, in: version, limit: bodyLimit)
+                if body == nil && row.summary.isEmpty && released[row.rowID] == nil {
+                    let since = waiting[row.rowID] ?? now
+                    if now.timeIntervalSince(since) < bodyWait {
+                        waiting[row.rowID] = since
+                        continue
+                    }
+                }
+                if waiting.removeValue(forKey: row.rowID) != nil { released[row.rowID] = now }
+                if let handedOver = released[row.rowID] { effective = max(effective, handedOver) }
+                guard effective > date else { continue }
                 result.append(row.notification(date: effective, body: body))
             }
             // Forget rows that are well behind.
             let horizon = now.addingTimeInterval(-2 * 86_400)
             firstSeen = firstSeen.filter { $0.value > horizon }
+            released = released.filter { $0.value > horizon }
+            waiting = waiting.filter { $0.value > horizon }
             return result.sorted { $0.date < $1.date }
         }
     }

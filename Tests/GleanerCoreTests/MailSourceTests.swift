@@ -139,6 +139,7 @@ import Testing
         let now = Date()
         insert(index, rowID: 10, mailbox: 1, received: now.addingTimeInterval(-30))
         let source = MailSource(directory: root)
+        source.bodyWait = 0  // these rows have no message files; text isn't the point here
         _ = try source.fetch(after: now.addingTimeInterval(-60))
         // Mail downloads a message received hours ago, after the cursor moved past that time.
         insert(index, rowID: 11, mailbox: 1, received: now.addingTimeInterval(-3 * 3600))
@@ -151,12 +152,50 @@ import Testing
         #expect(again.first?.date == late.first?.date)
     }
 
+    @Test func waitsForTheMessageText() throws {
+        let (root, index, version) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date()
+        let source = MailSource(directory: root)
+        source.bodyWait = 0.3
+        _ = try source.fetch(after: now.addingTimeInterval(-60))
+        // Indexed, but its file isn't written yet: held back, and the source keeps looking.
+        insert(index, rowID: 1500, mailbox: 1, received: now)
+        #expect(try source.fetch(after: now.addingTimeInterval(-60)).isEmpty)
+        #expect(source.changeToken() != nil)
+        // The file arrives: handed over with its text, dated no earlier than now.
+        let messages = version.appendingPathComponent("ACCT/INBOX.mbox/STORE/Data/1/Messages")
+        try FileManager.default.createDirectory(at: messages, withIntermediateDirectories: true)
+        let mail = "Content-Type: text/plain\n\n验证码 482913\n"
+        try (Data("\(mail.utf8.count)\n".utf8) + Data(mail.utf8)).write(to: messages.appendingPathComponent("1500.emlx"))
+        let cursor = Date()
+        let notes = try source.fetch(after: cursor.addingTimeInterval(-1))
+        #expect(notes.first?.body.contains("482913") == true)
+        #expect((notes.first?.date ?? .distantPast) >= cursor)
+    }
+
+    @Test func givesUpWaitingAfterAWhile() throws {
+        let (root, index, _) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date()
+        let source = MailSource(directory: root)
+        source.bodyWait = 0.2
+        _ = try source.fetch(after: now.addingTimeInterval(-60))
+        insert(index, rowID: 7, mailbox: 1, received: now)
+        #expect(try source.fetch(after: now.addingTimeInterval(-60)).isEmpty)
+        Thread.sleep(forTimeInterval: 0.3)
+        let notes = try source.fetch(after: now.addingTimeInterval(-60))
+        #expect(notes.map(\.id) == ["mail-7"])
+        #expect(notes.first?.body == "登录验证码")  // the subject alone
+    }
+
     @Test func historyOfANewAccountIsNotNewMail() throws {
         let (root, index, _) = try makeLibrary()
         defer { try? FileManager.default.removeItem(at: root) }
         let now = Date()
         insert(index, rowID: 10, mailbox: 1, received: now.addingTimeInterval(-30))
         let source = MailSource(directory: root)
+        source.bodyWait = 0  // these rows have no message files; text isn't the point here
         _ = try source.fetch(after: now.addingTimeInterval(-60))
         // An account is added; Mail downloads its inbox going back weeks.
         for row in 11...20 { insert(index, rowID: row, mailbox: 1, received: now.addingTimeInterval(-Double(row) * 86_400)) }

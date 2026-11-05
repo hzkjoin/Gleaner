@@ -1,205 +1,218 @@
 # 拾穗 Gleaner
 
-**从通知里拾起要紧的事。**
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey.svg)
 
-拾穗是一个常驻 macOS 菜单栏的小工具。它读取 Mac 上所有应用的通知（微信、企业微信、邮件、短信……），用大模型从群聊闲聊、营销推送这些噪音里，挑出真正需要你处理的事，列成一份待办清单。
+拾穗是一个 macOS 菜单栏应用。它读取 Mac 上的通知、信息和邮件，让 AI 从群聊闲聊和营销推送里挑出真正需要你处理的事，列成一份待办清单。
 
 ```
 菜单栏：  🌾 3 处理打卡异常
 
           ┌──────────────────────────────────────────┐
-          │ 拾穗  3 件待处理        今天已分析 128 条 │
+          │ 拾穗                       留意中    提问 │
           ├──────────────────────────────────────────┤
-          │ ● 处理 11 月 3 日打卡异常                 │
-          │   企业微信  打卡  5 分钟前                │
-          │   回复王总方案的提交时间                  │
-          │   微信  项目群  12 分钟前  截止今天       │
-          │   验证码 482913（某某云）                 │
-          │   信息  106900  刚刚                      │
+          │ 验证码 482913（某某云）                   │
+          │ 处理 11 月 3 日打卡异常      企业微信     │
+          │ 回复王总方案的提交时间        微信        │
           └──────────────────────────────────────────┘
 ```
 
-> 状态：早期原型（0.1.0）。功能可用，但接口和数据格式还可能变化。
+> 项目处于早期阶段（0.x），功能可用，但设置项和数据格式在 1.0 之前可能变化。
+
+## 目录
+
+- [功能](#功能)
+- [安装](#安装)
+- [配置](#配置)
+- [隐私与数据](#隐私与数据)
+- [免责声明](#免责声明)
+- [从源码构建](#从源码构建)
+- [项目结构](#项目结构)
+- [已知限制](#已知限制)
+- [参与贡献](#参与贡献)
+- [许可证](#许可证)
 
 ## 功能
 
-- **自动收集**：监听 Mac 的通知，以及从 iPhone 转发到 Mac 的通知（macOS 15+ 的"iPhone 通知"功能），增量读取，重启后从上次的位置继续
-- **邮件**：直接读取「邮件」应用里所有账号的收件箱（本地索引和正文），不依赖通知；邮件里的验证码同样立即提取
-- **@ 规则**：群里 @ 了别人的消息直接跳过；@ 你或 @ 所有人的正常提醒；谁都没 @ 的群消息只作为"值得关注"
-- **验证码优先**：验证码用规则识别，不等模型分析就立即显示
-- **AI 筛选**：识别有人问你、@ 你、需要你审批或回复、打卡异常、截止任务等事项，忽略与你无关的群聊、寒暄和推送；同一件事的多条消息合并成一条
-- **菜单栏提醒**：显示待办数量和最紧急的一件事；点开可以跳转到对应应用，或标记完成
-- **会话记录**：按会话在本机保存最近 7 天的消息（微信只有对方的消息，短信 / iMessage 包含双方），用于下面几项
-- **建议回复**：结合会话上下文给出可直接发送的回复，可编辑后复制
-- **会话摘要与提问**：一键总结某个群或联系人最近聊了什么；提问页支持多轮对话和历史会话，会按问题检索 7 天内的记录，需要时联网搜索（模型自带搜索，或 DeepSeek / 百度渠道）
-- **加到日程**：带时间的事项一键加到「提醒事项」或「日历」，到点由系统提醒
-- **记录空档**：记下各应用在前台的时段（如正开着微信时不会有通知），摘要和回答会注明哪段记录可能不全
-- **一句话规则**：如"王总的消息都标紧急""周末不提醒工作群"，由模型理解一次，之后由代码执行
-- **热点浏览**：从新闻、热搜、行情类通知中整理出事件标题，放在单独的"热点"标签页；过滤营销推广和点赞评论，同一事件合并，保留 24 小时，不计入待办
-- **模型自由**：支持 **OpenAI 兼容协议**（本地 Ollama、DeepSeek、通义千问、OpenAI 等）和 **Anthropic 协议**（Claude 及兼容服务），地址、模型名和 Key 都可以自己配置
+**收集**
 
-## 隐私
+- macOS 通知，以及 iPhone 转发到 Mac 的通知（macOS 15 起的「iPhone 通知」）
+- 「信息」里的短信和 iMessage
+- 「邮件」里所有账户的收件箱，直接读取本地邮件，不依赖通知
+- 微信收到的文件
+- 今天的日程和提醒事项
 
-拾穗需要读取你的全部通知，其中可能包括聊天内容。所以：
+**整理**
 
-- 所有处理都在本机完成，拾穗**没有自己的服务器**
-- 默认使用**本地模型**（Ollama），通知内容不会离开这台 Mac
-- 如果切换到云端模型，通知内容会发送到你配置的服务商，设置页会明确提示
-- API Key 保存在系统钥匙串中
-- 读取通知时会先把数据库复制到临时目录，读完立即删除；只保存提炼出的待办事项
+- AI 挑出需要你处理的事：有人问你、@ 你、需要审批或回复、截止任务、异常提醒等，同一件事的多条消息合并
+- 群消息按 @ 判断：@ 别人的跳过，@ 你或所有人的提醒，没有 @ 任何人的只作为「值得关注」
+- 验证码用规则识别，不等 AI 分析就显示，可自动复制
+- 新闻、热搜、行情类通知整理到单独的「热点」页
 
-## 系统要求
+**处理**
 
-- macOS 14 或更高版本
-- **完全磁盘访问权限**：通知数据库位于受保护的目录，没有公开 API 可以读取其他应用的通知
-- 一个大模型：推荐本地运行 [Ollama](https://ollama.com) + `qwen3:30b-a3b`（约 18GB，32GB 以上内存；关闭深度思考即可）
+- 根据最近的聊天记录给出建议回复，一键复制并打开对应应用
+- 总结某个群或联系人最近聊了什么
+- 提问：多轮对话，可检索 7 天内的记录，需要时联网搜索
+- 带时间的事项一键加到「提醒事项」或「日历」
+- 用一句话写规则，例如「王总的消息都标紧急」
+- 标记「不相关」的事项，类似的会被归纳成规则建议
+
+**模型**
+
+支持 OpenAI 兼容协议（本地 Ollama、DeepSeek、通义千问、OpenAI 等）和 Anthropic 协议（Claude），接口地址、模型和 Key 都可以自己配置。
 
 ## 安装
 
-1. 从 [Releases](../../releases/latest) 下载最新的 `Gleaner-版本号.dmg`，打开后把「拾穗」拖进「应用程序」。
-2. 第一次打开时系统会提示无法验证开发者（拾穗没有经过 Apple 公证）。打开「系统设置 → 隐私与安全性」，在页面下方点「仍要打开」。只需要这一次。
-3. 点菜单栏的 🌾，按引导授予**完全磁盘访问权限**，再在设置里选一个模型预设、填上 API Key。
+**系统要求**：macOS 14 或更高版本。
 
-之后有新版本时，拾穗会自动提示，点一下即可更新，授权不受影响。
+1. 从 [Releases](https://github.com/hzkjoin/Gleaner/releases/latest) 下载 `Gleaner-版本号.dmg`，打开后把「拾穗」拖进「应用程序」。
+2. 拾穗使用自签名证书，没有经过 Apple 公证，第一次打开时系统会阻止。打开「系统设置 → 隐私与安全性」，在页面下方点「仍要打开」。只需要一次。
+3. 点菜单栏的 🌾，按引导授予「完全磁盘访问权限」。
 
-## 从源码构建
+新版本发布后，拾穗会提示更新，确认后自动完成，已有的授权不受影响。可以在设置里关闭自动检查。
 
-### 1. 准备本地模型（可选）
+## 配置
 
-```bash
-# 安装 Ollama 后
-ollama pull qwen3:30b-a3b
-```
+点菜单栏的 🌾，再点右上角的齿轮。
 
-也可以跳过这一步，在设置里改用云端服务。
-
-### 2. 构建
-
-需要 Xcode 或 Command Line Tools（Swift 6）。
-
-```bash
-git clone <repo-url> Gleaner && cd Gleaner
-scripts/build-app.sh          # 生成 build/拾穗.app
-```
-
-### 3. 安装、授权并运行
-
-```bash
-scripts/install.sh            # 安装到 /Applications 并启动，首次启动会开启开机自启
-```
-
-点击菜单栏的 🌾，按提示给"拾穗"授予**完全磁盘访问权限**（系统设置 → 隐私与安全性）。
-
-**关于签名**：macOS 按代码签名识别应用的隐私授权。`build-app.sh` 会优先使用钥匙串里的 Apple Development / Developer ID 证书（也可以用环境变量 `GLEANER_SIGN_IDENTITY` 指定），这样重新安装后授权依然有效；没有证书时会使用临时签名，每次重新安装都需要重新授权。
-
-开发时也可以直接在终端运行调试版：
-
-```bash
-scripts/run-dev.sh
-```
-
-这种方式下文件访问权限算在终端（或编辑器）头上，给终端授权一次即可。
-
-### 4. 配置
-
-点击菜单栏的 🌾 → 齿轮图标：
+**模型**：选一个预设，填上 API Key，点「测试连接」。
 
 | 预设 | 协议 | 接口地址 | 默认模型 |
 |---|---|---|---|
 | 本地 Ollama | OpenAI 兼容 | `http://127.0.0.1:11434/v1` | `qwen3:30b-a3b` |
-| Claude | Anthropic | `https://api.anthropic.com` | `claude-opus-5-5` |
 | DeepSeek | OpenAI 兼容 | `https://api.deepseek.com` | `deepseek-flash` |
 | 通义千问 | OpenAI 兼容 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| Claude | Anthropic | `https://api.anthropic.com` | `claude-opus-5-5` |
 
-填好后点"测试连接"，会用 3 条示例通知试跑一次。建议同时填上"我的称呼"，帮助模型识别哪些消息是 @ 你的。
+想让通知内容完全不离开本机，可以用 [Ollama](https://ollama.com) 在本地运行模型，例如 `ollama pull qwen3:30b-a3b`（约 18 GB，建议 32 GB 以上内存）。
 
-## 项目结构
+**我的称呼**：填上群里别人怎么称呼你，用来判断哪些消息 @ 了你。
 
-```
-Sources/
-  GleanerCore/                 与界面无关的核心逻辑，可独立测试
-    Models/                    AppNotification、ActionItem
-    Sources/                   NotificationSource 协议；Mac 通知、iPhone 转发通知、组合数据源
-    LLM/                       LLMProvider 协议；OpenAI 兼容、Anthropic 两种实现
-    Extraction/                提示词、ActionExtractor、NewsCurator、@ 判断、验证码识别、ReplyWriter（默认关闭）
-    Pipeline/                  NotificationPipeline：增量读取、去重、分批、断点续跑
-    Support/                   SecretStore（钥匙串）、JSONFileStore
-  Gleaner/                     SwiftUI 菜单栏应用
-Tests/GleanerCoreTests/        单元测试（Swift Testing）
-scripts/                       构建与运行脚本
-```
+**联网搜索**：Claude 和通义千问使用模型自带的搜索；其他模型可以选 DeepSeek 或百度的搜索接口，需要对应的 Key。
 
-数据流：
+**读取**：可以分别关闭信息、邮件、微信文件、日历和热点。
 
-```
-NotificationSource ──新通知──▶ NotificationPipeline ──分批──▶ ActionExtractor ──▶ LLMProvider
-                                      │                              │
-                                 进度持久化                     ActionItem ──▶ 菜单栏
-```
+## 隐私与数据
 
-## 扩展
+拾穗会读到你的聊天内容、短信和邮件，请先了解它如何处理这些数据。
 
-**接入新的通知来源**（例如 IMAP 邮箱、日历）：实现 `NotificationSource`：
+**需要的权限**
 
-```swift
-public protocol NotificationSource: Sendable {
-    func changeToken() -> Date?                                 // 有变化时返回不同的值
-    func fetch(after date: Date) throws -> [AppNotification]   // 按时间升序返回
-}
-```
+| 权限 | 用途 |
+|---|---|
+| 完全磁盘访问 | 读取通知数据库、「信息」数据库、「邮件」的本地邮件、微信接收文件目录 |
+| 日历、提醒事项 | 显示今天的日程；把事项加到提醒事项或日历 |
+| 通知 | 早晚简报 |
 
-**接入新的模型协议**：实现 `LLMProvider`，并在 `APIProtocol` / `ProviderConfiguration.makeProvider` 中注册：
+**保存在本机的数据**
 
-```swift
-public protocol LLMProvider: Sendable {
-    func complete(_ request: CompletionRequest) async throws -> String
-}
-```
+位于 `~/Library/Application Support/Gleaner/`：
 
-**调整识别规则**：修改 `Sources/GleanerCore/Extraction/ExtractionPrompt.swift`。
+- 待办事项、已处理事项、热点
+- 最近 7 天的消息记录，用于建议回复、摘要和提问
+- 提问的历史会话，最多 50 个
+- 最近的处理记录（每条通知被如何处理）
+- 各应用在前台的时段，只记录应用名称和时间，保留 7 天
 
-**用真实环境验证**（可选，需要设置环境变量才会运行）：
+API Key 保存在系统钥匙串中。读取数据库时会先复制到临时目录，读完即删除。卸载时删除上面的目录即可清除全部数据。
+
+**会发送到外部的数据**
+
+拾穗没有自己的服务器，不收集任何使用数据。以下情况会有数据离开本机：
+
+| 发送给 | 内容 | 何时 |
+|---|---|---|
+| 你配置的模型服务商 | 通知、消息和邮件的内容，以及提问时用到的聊天记录 | 每次分析、生成回复、摘要和提问时；使用本地模型时不会离开本机 |
+| 你配置的搜索服务商 | 搜索关键词 | 开启联网搜索且模型决定搜索时 |
+| GitHub | 当前版本号 | 检查更新时 |
+
+使用云端模型前，请阅读对应服务商的隐私政策，并确认符合你所在单位的规定。
+
+## 免责声明
+
+- 本项目是个人开源项目，与 Apple、腾讯、DeepSeek、阿里云、百度、Anthropic 等公司没有关联，也未获得其认可。文中提到的产品名称和商标归各自所有者。
+- 拾穗读取的通知数据库、「信息」和「邮件」的本地数据，都没有公开的接口文档，系统或应用更新后可能无法使用。
+- AI 的判断可能出错，可能漏掉重要事项，也可能误判。请不要把拾穗作为处理重要事务的唯一依据。
+- 使用云端模型或搜索服务时，数据由对应服务商处理，产生的费用由使用者承担。
+- 读取的消息中包含他人的信息。请只在自己的设备上、为管理自己的消息使用拾穗，并遵守所在地关于个人信息保护的法律法规。不得用于监控他人或获取未经授权的信息。
+- 本软件按「现状」提供，不提供任何明示或默示的担保。作者不对使用本软件造成的任何直接或间接损失负责，包括数据丢失、遗漏事项和服务费用。详见 [LICENSE](LICENSE)。
+
+## 从源码构建
+
+需要 Swift 6（Xcode 或 Command Line Tools）。
 
 ```bash
-# 用本地模型跑一组示例通知，检查识别效果
-GLEANER_LIVE_BASE_URL=http://127.0.0.1:11434/v1 GLEANER_LIVE_MODEL=qwen3:30b-a3b scripts/swiftw test --filter "LiveModelTests|LiveNewsCurationTests"
-# 读取本机真实的 iPhone 转发通知，只输出各应用的数量
-GLEANER_LIVE_IPHONE=1 scripts/swiftw test --filter LiveIPhoneSourceTests
+git clone https://github.com/hzkjoin/Gleaner.git && cd Gleaner
+scripts/build-app.sh          # 生成 build/拾穗.app
+scripts/install.sh            # 安装到 /Applications 并启动
 ```
 
-## 开发
+macOS 按代码签名识别应用的隐私授权。`build-app.sh` 依次尝试环境变量 `GLEANER_SIGN_IDENTITY` 指定的证书、`scripts/make-signing-cert.sh` 生成的自签名证书、Apple 开发者证书；都没有时使用临时签名，每次重新安装都需要重新授权。
+
+常用命令：
 
 ```bash
 scripts/swiftw build      # 编译
 scripts/swiftw test       # 运行测试
-scripts/run-dev.sh        # 构建调试版并运行
+scripts/run-dev.sh        # 构建调试版并在终端运行
 ```
 
-`scripts/swiftw` 是对 `swift` 命令的薄包装。从 macOS 27 SDK 开始，SwiftUI 的 `@State` 改由宏实现，而宏插件只随 Xcode 提供、Command Line Tools 里没有。如果检测到这种情况，`swiftw` 会自动改用一个不需要宏插件的已安装 SDK。装了 Xcode 时，它等同于直接运行 `swift`。
+`scripts/swiftw` 是 `swift` 命令的包装：只装了 Command Line Tools 时，macOS 27 SDK 缺少 SwiftUI 需要的宏插件，`swiftw` 会改用一个可用的 SDK。装了 Xcode 时等同于直接运行 `swift`。
+
+部分测试会访问真实的模型或本机数据，需要设置环境变量才会运行，见 `Tests/GleanerCoreTests/LiveModelTests.swift`。
 
 ### 发布新版本
-
-发版用自签名证书签名、Sparkle 推送更新，一条命令完成：
 
 ```bash
 scripts/release.sh 0.2.0 [更新说明.md]
 ```
 
-它会更新版本号、编译签名、打包 DMG、生成签名过的更新清单 `appcast.xml`，提交代码并在 GitHub 上创建 Release。已安装的拾穗从 `releases/latest/download/appcast.xml` 检查更新。
+脚本会更新版本号、编译签名、打包 DMG、生成签名的更新清单 `appcast.xml`，并在 GitHub 上创建 Release。已安装的拾穗从 `releases/latest/download/appcast.xml` 检查更新。
 
 第一次发版前需要：
 
-- 签名证书：`scripts/make-signing-cert.sh`，会在 `~/.gleaner-signing` 留一份备份。**这份证书要一直用下去**，换了证书，用户的授权会失效，也收不到更新
-- Sparkle 工具：把 [Sparkle 2.10.0](https://github.com/sparkle-project/Sparkle/releases/tag/2.10.0) 的压缩包解压到 `.tools/sparkle-2.10.0`，再运行 `.tools/sparkle-2.10.0/bin/generate_keys --account gleaner` 生成更新密钥，把输出的公钥填进 `Resources/Info.plist` 的 `SUPublicEDKey`。私钥同样要备份（`generate_keys --account gleaner -x 文件`）
-- `gh auth login` 登录仓库所在的 GitHub 账号
+- 签名证书：运行 `scripts/make-signing-cert.sh`，备份会保存在 `~/.gleaner-signing`。之后的每个版本都必须使用同一张证书，否则用户的授权会失效，也无法收到更新。
+- 更新密钥：把 [Sparkle 2.10.0](https://github.com/sparkle-project/Sparkle/releases/tag/2.10.0) 解压到 `.tools/sparkle-2.10.0`，运行 `.tools/sparkle-2.10.0/bin/generate_keys --account gleaner`，把输出的公钥填入 `Resources/Info.plist` 的 `SUPublicEDKey`。私钥同样需要备份。
+- 用 `gh auth login` 登录仓库所在的 GitHub 账号。
+
+## 项目结构
+
+```
+Sources/
+  GleanerCore/          与界面无关的逻辑，均有单元测试
+    Sources/            数据来源：通知、iPhone 通知、信息、邮件、微信文件
+    Pipeline/           增量读取、去重、分批、断点续跑
+    Extraction/         提示词、事项识别、@ 判断、验证码、热点、建议回复
+    LLM/                模型协议：OpenAI 兼容、Anthropic，工具调用
+    Search/             联网搜索：DeepSeek、百度
+    Memory/             消息记录、摘要与提问、规则、不相关反馈
+    Calendar/           日程、时间解析、专注模式
+    Models/             通知、事项、热点等数据结构
+  Gleaner/              SwiftUI 菜单栏应用
+Tests/GleanerCoreTests/ 单元测试（Swift Testing）
+scripts/                构建、安装、打包、发版
+```
+
+扩展时实现对应的协议即可：
+
+- 新的数据来源：`NotificationSource`
+- 新的模型协议：`LLMProvider`（需要工具调用时实现 `ToolCallingProvider`），并在 `ProviderConfiguration.makeProvider` 中注册
+- 新的搜索服务：`WebSearchService`，并加入 `WebSearchChannel`
 
 ## 已知限制
 
-- 通知数据库没有公开文档，macOS 大版本更新后可能需要适配；iPhone 转发通知的存储格式同样如此
-- iPhone 转发的通知只在通知中心里保留，在手机或 Mac 上清除后，拾穗就读不到了
-- 应用设置成"不显示通知内容"时，拾穗只能看到"你收到了一条消息"
-- 被设为静音、或关闭了通知的应用和群聊，不会进入通知数据库
-- 依赖完全磁盘访问权限，无法上架 Mac App Store
+- 无法上架 Mac App Store：沙盒应用不能读取其他应用的通知。
+- 应用设置为不显示通知预览时，拾穗只能看到「你收到了一条消息」。
+- 静音或关闭了通知的应用和群聊，不会进入通知数据库。
+- 正开着微信看聊天时，微信不发通知，这段时间的消息会缺失；拾穗会在摘要和回答中注明。
+- 微信只能拿到对方发来的消息，拿不到你自己发出的。
+- iPhone 转发的通知在通知中心清除后就读不到了；Mac 上装了的应用，系统不会转发它在 iPhone 上的通知。
+- 邮件需要先在「邮件」应用中添加账户。
+
+## 参与贡献
+
+欢迎提交 Issue 和 Pull Request。提交代码前请确保 `scripts/swiftw test` 全部通过，与界面无关的逻辑请放在 `GleanerCore` 并补充测试。界面文字保持简短，不写解释性的说明。
 
 ## 许可证
 
