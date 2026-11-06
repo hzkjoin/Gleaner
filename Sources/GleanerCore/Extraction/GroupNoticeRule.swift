@@ -31,7 +31,7 @@ public enum GroupNoticeRule {
                     notificationDate: latest.date,
                     sourceIDs: sorted.map(\.id)
                 )
-                item.sourceMessages = sorted.map(\.body)
+                item.setSources(sorted)
                 return item
             }
             .sorted { $0.notificationDate < $1.notificationDate }

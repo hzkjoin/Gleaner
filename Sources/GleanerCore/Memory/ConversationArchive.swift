@@ -66,6 +66,15 @@ public final class ConversationArchive: @unchecked Sendable {
     }
 
     /// The last `limit` messages of a conversation, oldest first.
+    /// When the messages with these ids arrived, for those still kept.
+    public func dates(of ids: Set<String>) -> [String: Date] {
+        lock.withLock {
+            var result: [String: Date] = [:]
+            for message in byConversation.values.joined() where ids.contains(message.id) { result[message.id] = message.date }
+            return result
+        }
+    }
+
     public func messages(in conversation: ConversationKey, limit: Int = 30) -> [ArchivedMessage] {
         let key = ConversationKey(appID: conversation.appID.lowercased(), title: conversation.title)
         return lock.withLock { Array((byConversation[key] ?? []).suffix(limit)) }

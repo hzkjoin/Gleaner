@@ -110,7 +110,6 @@ final class AppModel: ObservableObject {
     private var isRunning = false
     private var needsRerun = false
     private var lastFailure: Date?
-    private var didOfferAuthorization = false
 
     /// How often the source is polled for changes.
     private let pollInterval: TimeInterval = 3
@@ -161,7 +160,14 @@ final class AppModel: ObservableObject {
             source: source,
             stateStore: JSONFileStore(url: dataDirectory.appendingPathComponent("pipeline.json"))
         )
-        self.items = itemStore.load() ?? []
+        var items = itemStore.load() ?? []
+        // Items saved before per-message times were kept get them from the archive.
+        let missing = Set(items.filter { $0.sourceDates.isEmpty }.flatMap(\.sourceIDs))
+        if !missing.isEmpty {
+            let dates = archive.dates(of: missing)
+            for index in items.indices { items[index].restoreSourceDates(dates) }
+        }
+        self.items = items
         self.history = historyStore.load() ?? []
         self.news = (newsStore.load() ?? []).merging([])
         self.activity = (activityStore.load() ?? []).merging([])
@@ -310,7 +316,9 @@ final class AppModel: ObservableObject {
         refreshEvents()
         // During a Focus the briefing waits; it is still sent if the Focus ends within the hour.
         if settings.briefings && !isQuieted {
-            BriefingNotifier.sendIfDue(actionable: actionableItems.count, news: news.count)
+            BriefingNotifier.sendIfDue(fallback: Briefing.message(actionable: actionableItems.count, news: news.count)) { [weak self] in
+                await self?.briefingText()
+            }
         }
         let expired = items.filter { ItemLifecycle.isExpired($0, now: now) }
         if !expired.isEmpty {
@@ -647,11 +655,7 @@ final class AppModel: ObservableObject {
             log.error("Notification database is not readable; Full Disk Access is required")
             status = .accessDenied
             lastFailure = Date()
-            // The installed app offers the guide once per launch; development builds rely on the terminal's access.
-            if LoginItem.isInstalled, !didOfferAuthorization, !AuthorizationGuide.shared.isShowing {
-                didOfferAuthorization = true
-                startAuthorizationGuide()
-            }
+            // The guide opens only when the user asks for it (授权 in the panel).
         } catch {
             log.error("Pipeline run failed: \(error.localizedDescription, privacy: .public)")
             status = .failed(error.localizedDescription)
@@ -742,6 +746,90 @@ final class AppModel: ObservableObject {
     func dismissSummary(_ key: ConversationKey) {
         summaryTasks[key]?.cancel()
         summaries[key] = nil
+    }
+
+    // MARK: - Overview
+
+    enum OverviewState: Equatable {
+        case loading
+        case ready(Overview)
+        case failed
+    }
+
+    /// The overview card at the top of the list; nil when closed.
+    @Published private(set) var overview: OverviewState?
+    /// The latest overview written, kept while the card is closed.
+    private var lastOverview: Overview?
+    private var overviewTask: Task<Void, Never>?
+
+    /// Items an overview speaks about now.
+    private var overviewItems: [ActionItem] { Overview.items(from: visibleItems) }
+    var canShowOverview: Bool { !overviewItems.isEmpty }
+
+    /// Items were added or done since the overview shown was written.
+    var overviewIsStale: Bool {
+        guard case .ready(let shown) = overview else { return false }
+        return shown.signature != Overview.signature(of: visibleItems)
+    }
+
+    /// Opens the overview: the last one if nothing changed since, otherwise a new one.
+    func showOverview(refresh: Bool = false) {
+        if !refresh, let last = lastOverview, last.signature == Overview.signature(of: visibleItems) {
+            overview = .ready(last)
+            return
+        }
+        overviewTask?.cancel()
+        overview = .loading
+        let assistant = assistant
+        let items = overviewItems
+        overviewTask = Task { [weak self] in
+            do {
+                let written = try await assistant.overview(of: items, appName: { AppDirectory.shared.name(for: $0) })
+                guard !Task.isCancelled else { return }
+                self?.lastOverview = written
+                self?.overview = .ready(written)
+            } catch is CancellationError {
+            } catch {
+                log.error("Overview failed: \(error.localizedDescription, privacy: .public)")
+                if !Task.isCancelled { self?.overview = .failed }
+            }
+        }
+    }
+
+    func hideOverview() {
+        overviewTask?.cancel()
+        overview = nil
+    }
+
+    /// Items to bring into view and mark for a moment, from an overview line.
+    @Published private(set) var highlightedItemIDs: Set<UUID> = []
+    struct RevealRequest: Equatable {
+        let target: UUID
+        /// Asking for the same card twice still scrolls.
+        let nonce = UUID()
+    }
+    @Published private(set) var revealRequest: RevealRequest?
+
+    func reveal(_ ids: [UUID]) {
+        let present = ids.filter { id in visibleItems.contains { $0.id == id } }
+        guard let first = present.first else { return }
+        highlightedItemIDs = Set(present)
+        revealRequest = RevealRequest(target: first)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.6))
+            if self?.highlightedItemIDs == Set(present) { self?.highlightedItemIDs = [] }
+        }
+    }
+
+    /// The briefing text for a notification: the overview's headline and advice, written now.
+    func briefingText() async -> String? {
+        let items = overviewItems
+        guard !items.isEmpty else { return nil }
+        guard let written = try? await assistant.overview(of: items, appName: { AppDirectory.shared.name(for: $0) }) else {
+            return nil
+        }
+        lastOverview = written
+        return written.briefing
     }
 
     // MARK: - Foreground apps

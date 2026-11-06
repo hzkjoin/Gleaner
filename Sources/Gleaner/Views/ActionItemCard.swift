@@ -24,8 +24,8 @@ struct ActionItemCard: View {
                     .padding(.top, 2)
             } else {
                 // Messages in order, each file where it was sent; a reply item's message is its title.
-                let entries = item.sourceEntries(files: model.files(for: item)).filter { entry in
-                    if case .text = entry { return !showsMessageAsTitle }
+                let entries = item.datedSourceEntries(files: model.files(for: item)).filter { dated in
+                    if case .text = dated.entry { return !showsMessageAsTitle }
                     return true
                 }
                 if !entries.isEmpty { SourceList(entries: entries) }
@@ -185,7 +185,7 @@ struct AppIcon: View {
 /// An item's messages, oldest first, with files where they were sent.
 struct SourceList: View {
     @EnvironmentObject private var model: AppModel
-    let entries: [ActionItem.SourceEntry]
+    let entries: [ActionItem.DatedEntry]
     @State private var expanded = false
 
     /// Shown while collapsed: the newest ones, which the summary is usually about.
@@ -194,7 +194,8 @@ struct SourceList: View {
     var body: some View {
         let hidden = max(entries.count - collapsedCount, 0)
         let shown = expanded ? entries : Array(entries.suffix(collapsedCount))
-        let hasText = entries.contains { if case .text = $0 { return true } else { return false } }
+        let hasText = entries.contains { if case .text = $0.entry { return true } else { return false } }
+        let timed = showsTimes
         HStack(alignment: .top, spacing: 8) {
             // A file on its own needs no quote bar.
             if hasText { RoundedRectangle(cornerRadius: 1).fill(Theme.divider).frame(width: 2) }
@@ -207,15 +208,24 @@ struct SourceList: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.textTertiary)
                 }
-                ForEach(Array(shown.enumerated()), id: \.offset) { _, entry in
-                    switch entry {
+                ForEach(Array(shown.enumerated()), id: \.offset) { _, dated in
+                    switch dated.entry {
                     case .text(let message):
-                        Self.line(message)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.textSecondary)
-                            .lineSpacing(2)
-                            .lineLimit(expanded ? 8 : 2)
-                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Self.line(message)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.textSecondary)
+                                .lineSpacing(2)
+                                .lineLimit(expanded ? 8 : 2)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if timed, let date = dated.date {
+                                Spacer(minLength: 0)
+                                Text(Self.time(date))
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(Theme.textTertiary)
+                                    .fixedSize()
+                            }
+                        }
                     case .file(let sender, let path):
                         VStack(alignment: .leading, spacing: 4) {
                             if let sender = sender ?? model.origin(ofFile: path)?.sender {
@@ -230,6 +240,26 @@ struct SourceList: View {
                 }
             }
         }
+    }
+
+    /// Times only when the messages are spread out; a burst reads as one moment.
+    private var showsTimes: Bool {
+        let dates = entries.compactMap(\.date)
+        guard dates.count >= 2, let first = dates.min(), let last = dates.max() else { return false }
+        return last.timeIntervalSince(first) >= 120
+    }
+
+    /// "14:05", "昨天 14:05", "11月3日 14:05".
+    static func time(_ date: Date) -> String {
+        let calendar = Calendar.current
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        if calendar.isDateInToday(date) {
+            formatter.dateFormat = "HH:mm"
+            return formatter.string(from: date)
+        }
+        formatter.dateFormat = calendar.isDateInYesterday(date) ? "'昨天' HH:mm" : "M月d日 HH:mm"
+        return formatter.string(from: date)
     }
 
     /// "张三: 内容" with the sender set apart.

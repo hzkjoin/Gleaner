@@ -19,7 +19,9 @@ public enum DirectMessageRule {
                 let known = item.sourceIDs
                 let added = sorted.filter { !known.contains($0.id) }
                 item.sourceIDs += added.map(\.id)
-                item.sourceMessages = Array((item.messages + added.map(\.body)).suffix(30))
+                let merged = Array((Array(zip(item.messages, item.messageDates)) + added.map { ($0.body, Optional($0.date)) }).suffix(30))
+                item.sourceMessages = merged.map(\.0)
+                item.sourceDates = merged.map(\.1)
                 if latest.date > item.notificationDate { item.notificationDate = latest.date }
                 result[index] = item
                 continue
@@ -35,7 +37,7 @@ public enum DirectMessageRule {
                 notificationDate: latest.date,
                 sourceIDs: sorted.map(\.id)
             )
-            item.sourceMessages = sorted.map(\.body)
+            item.setSources(sorted)
             result.append(item)
         }
         return result

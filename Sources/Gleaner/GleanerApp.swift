@@ -89,6 +89,11 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         MainActor.assumeIsolated {
             if id == Updater.notificationID {
                 Updater.shared.checkForUpdates()
+            } else if id.hasPrefix(BriefingNotifier.identifierPrefix) {
+                // The briefing: open on the overview it came from.
+                model?.route = .main
+                model?.showOverview()
+                menuBar?.open()
             } else {
                 menuBar?.open()
             }

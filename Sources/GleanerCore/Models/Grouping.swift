@@ -63,7 +63,11 @@ extension ActionItem {
         snoozedUntil = nil
         let excerpts = [sourceExcerpt, newer.sourceExcerpt].filter { !$0.isEmpty }.joined(separator: " / ")
         sourceExcerpt = String(excerpts.suffix(300))
-        sourceMessages = Array((messages + newer.messages.filter { !messages.contains($0) }).suffix(30))
+        let known = Set(messages)
+        let merged = Array((Array(zip(messages, messageDates))
+            + zip(newer.messages, newer.messageDates).filter { !known.contains($0.0) }).suffix(30))
+        sourceMessages = merged.map(\.0)
+        sourceDates = merged.map(\.1)
         // Files keep their own boxes after merging.
         sourceFiles = (files + newer.files).reduce(into: [String]()) { result, path in
             if path != attachmentPath && !result.contains(path) { result.append(path) }

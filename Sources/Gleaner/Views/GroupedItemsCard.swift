@@ -86,7 +86,7 @@ private struct GroupedItemLine: View {
         VStack(alignment: .leading, spacing: 5) {
             titleLine
             // The messages behind it, as on a single card.
-            let entries = item.sourceEntries(files: model.files(for: item))
+            let entries = item.datedSourceEntries(files: model.files(for: item))
             if !entries.isEmpty { SourceList(entries: entries).padding(.leading, 11) }
         }
         .onHover { hovering = $0 }

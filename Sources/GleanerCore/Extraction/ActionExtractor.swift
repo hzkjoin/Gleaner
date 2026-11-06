@@ -216,7 +216,7 @@ public struct ActionExtractor: Sendable {
             notificationDate: latest.date,
             sourceIDs: ordered.map(\.id)
         )
-        item.sourceMessages = ordered.map(\.body)
+        item.setSources(ordered)
         return item
     }
 }

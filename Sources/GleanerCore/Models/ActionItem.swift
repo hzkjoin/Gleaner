@@ -63,6 +63,9 @@ public struct ActionItem: Codable, Identifiable, Hashable, Sendable {
     public var schedule: ScheduleSuggestion?
     /// The source messages one by one, oldest first. Empty for items saved before it existed.
     public var sourceMessages: [String] = []
+    /// When each of `sourceMessages` arrived, in the same order; nil where unknown. Empty for
+    /// items saved before it existed.
+    public var sourceDates: [Date?] = []
     /// Received files gathered into this item when items were merged.
     public var sourceFiles: [String] = []
 
@@ -104,9 +107,41 @@ public struct ActionItem: Codable, Identifiable, Hashable, Sendable {
         case file(sender: String?, path: String)
     }
 
+    /// Sets the source messages from notifications, in time order, with when each arrived.
+    public mutating func setSources(_ notes: [AppNotification]) {
+        let ordered = notes.sorted { $0.date < $1.date }
+        sourceMessages = ordered.map(\.body)
+        sourceDates = ordered.map(\.date)
+    }
+
+    /// Fills in `sourceDates` for items saved before they were kept, when each message's
+    /// notification id is known (one id per message, in order).
+    public mutating func restoreSourceDates(_ dates: [String: Date]) {
+        guard sourceDates.isEmpty, !sourceMessages.isEmpty, sourceIDs.count == sourceMessages.count else { return }
+        let found = sourceIDs.map { dates[$0] }
+        if found.contains(where: { $0 != nil }) { sourceDates = found }
+    }
+
+    /// When each of `messages` arrived, where known.
+    public var messageDates: [Date?] {
+        let messages = messages
+        return sourceDates.count == messages.count ? sourceDates : Array(repeating: nil, count: messages.count)
+    }
+
+    /// A source entry with when its message arrived.
+    public struct DatedEntry: Hashable, Sendable {
+        public var entry: SourceEntry
+        public var date: Date?
+    }
+
     /// The source messages in order, with each of `files` placed where it was sent: at its
     /// "张三: [文件] 名字" message, or at the bare file name line; files mentioned nowhere go last.
     public func sourceEntries(files: [String]) -> [SourceEntry] {
+        datedSourceEntries(files: files).map(\.entry)
+    }
+
+    /// `sourceEntries(files:)` with when each message arrived.
+    public func datedSourceEntries(files: [String]) -> [DatedEntry] {
         let byName = Dictionary(files.map { (($0 as NSString).lastPathComponent, $0) }, uniquingKeysWith: { first, _ in first })
         // Names that have a "[文件]" message: their bare name lines are duplicates.
         let sent = Set(messages.compactMap { message -> String? in
@@ -114,25 +149,27 @@ public struct ActionItem: Codable, Identifiable, Hashable, Sendable {
             return text.hasPrefix("[文件]") ? text.dropFirst(4).trimmingCharacters(in: .whitespaces) : nil
         })
         var placed = Set<String>()
-        var entries: [SourceEntry] = []
-        for message in messages {
+        var entries: [DatedEntry] = []
+        let dates = messageDates
+        for (index, message) in messages.enumerated() {
+            let date = dates[index]
             let text = Self.stripSender(message)
             if text.hasPrefix("[文件]") {
                 let name = text.dropFirst(4).trimmingCharacters(in: .whitespaces)
                 if let path = byName[name], !placed.contains(path) {
                     placed.insert(path)
-                    entries.append(.file(sender: Self.sender(of: message), path: path))
+                    entries.append(DatedEntry(entry: .file(sender: Self.sender(of: message), path: path), date: date))
                     continue
                 }
             } else if let path = byName[text] {
                 if sent.contains(text) || placed.contains(path) { continue }
                 placed.insert(path)
-                entries.append(.file(sender: Self.sender(of: message), path: path))
+                entries.append(DatedEntry(entry: .file(sender: Self.sender(of: message), path: path), date: date))
                 continue
             }
-            entries.append(.text(message))
+            entries.append(DatedEntry(entry: .text(message), date: date))
         }
-        for path in files where !placed.contains(path) { entries.append(.file(sender: nil, path: path)) }
+        for path in files where !placed.contains(path) { entries.append(DatedEntry(entry: .file(sender: nil, path: path), date: nil)) }
         return entries
     }
 
@@ -207,7 +244,7 @@ public struct ActionItem: Codable, Identifiable, Hashable, Sendable {
 extension ActionItem {
     private enum CodingKeys: String, CodingKey {
         case id, summary, due, priority, kind, suggestedReply, appID, origin, sourceTitle, sourceExcerpt,
-             notificationDate, createdAt, snoozedUntil, sourceIDs, attachmentPath, schedule, sourceMessages, sourceFiles
+             notificationDate, createdAt, snoozedUntil, sourceIDs, attachmentPath, schedule, sourceMessages, sourceFiles, sourceDates
     }
 
     /// Decodes items saved by earlier versions, which lacked some of the newer fields.
@@ -232,6 +269,7 @@ extension ActionItem {
         )
         schedule = try c.decodeIfPresent(ScheduleSuggestion.self, forKey: .schedule)
         sourceMessages = try c.decodeIfPresent([String].self, forKey: .sourceMessages) ?? []
+        sourceDates = try c.decodeIfPresent([Date?].self, forKey: .sourceDates) ?? []
         sourceFiles = try c.decodeIfPresent([String].self, forKey: .sourceFiles) ?? []
     }
 }

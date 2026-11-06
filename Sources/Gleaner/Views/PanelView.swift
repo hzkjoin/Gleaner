@@ -33,6 +33,9 @@ struct PanelView: View {
                                 (.news, "热点", model.news.count),
                             ])
                             Spacer()
+                            if tab == .items && model.canShowOverview && model.overview == nil {
+                                OverviewButton { model.showOverview() }
+                            }
                             if tab == .news && !model.news.isEmpty {
                                 Button("清空") { model.clearNews() }
                                     .buttonStyle(.plain)
@@ -131,23 +134,47 @@ struct PanelView: View {
         if model.status == .accessDenied {
             PermissionCard()
                 .padding(.horizontal, 12)
-                .padding(.bottom, 12)
+                .padding(.top, 2)
+                .padding(.bottom, 14)
         } else if model.visibleItems.isEmpty && model.upcomingEvents.isEmpty {
             EmptyState(symbol: "checkmark.circle", title: "一切就绪",
                        message: model.snoozedCount > 0 ? "\(model.snoozedCount) 件稍后提醒" : nil)
         } else {
+            if !showsTabs && model.canShowOverview && model.overview == nil {
+                HStack {
+                    Spacer()
+                    OverviewButton { model.showOverview() }
+                }
+                .padding(.horizontal, Theme.horizontalPadding)
+                .padding(.bottom, 10)
+            }
             AutoSizingScrollView(maxHeight: 540) {
-                VStack(alignment: .leading, spacing: 18) {
-                    if !model.upcomingEvents.isEmpty {
-                        EventsCard(events: model.upcomingEvents, now: model.now)
+                ScrollViewReader { proxy in
+                    VStack(alignment: .leading, spacing: 18) {
+                        if let overview = model.overview {
+                            OverviewCard(state: overview).id("overview")
+                        }
+                        if !model.upcomingEvents.isEmpty {
+                            EventsCard(events: model.upcomingEvents, now: model.now)
+                        }
+                        ForEach(model.sections, id: \.kind) { section in
+                            SectionView(kind: section.kind, groups: section.groups)
+                        }
                     }
-                    ForEach(model.sections, id: \.kind) { section in
-                        SectionView(kind: section.kind, groups: section.groups)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 2)
+                    .padding(.bottom, 14)
+                    .onChange(of: model.overview == nil) { _, closed in
+                        if !closed { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("overview", anchor: .top) } }
+                    }
+                    .onChange(of: model.revealRequest) { _, request in
+                        guard let request else { return }
+                        // Cards are anchored by the first item of their group.
+                        let group = model.sections.flatMap(\.groups).first { $0.contains { $0.id == request.target } }
+                        guard let anchor = group?.first?.id else { return }
+                        withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(anchor, anchor: .top) }
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 2)
-                .padding(.bottom, 14)
             }
         }
     }
@@ -185,11 +212,23 @@ private struct SectionView: View {
             .onHover { hovering = $0 }
 
             ForEach(groups, id: \.first?.id) { group in
-                if group.count > 1 {
-                    GroupedItemsCard(items: group)
-                } else if let item = group.first {
-                    ActionItemCard(item: item)
+                Group {
+                    if group.count > 1 {
+                        GroupedItemsCard(items: group)
+                    } else if let item = group.first {
+                        ActionItemCard(item: item)
+                    }
                 }
+                .id(group.first?.id)
+                .overlay {
+                    // Pointed at from the overview.
+                    if group.contains(where: { model.highlightedItemIDs.contains($0.id) }) {
+                        RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                            .strokeBorder(Theme.textPrimary.opacity(0.45), lineWidth: 1.5)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .animation(.easeOut(duration: 0.3), value: model.highlightedItemIDs)
             }
         }
     }
@@ -280,20 +319,32 @@ private struct PermissionCard: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("需要完全磁盘访问权限", systemImage: "lock.shield")
-                .font(.system(size: 13.5, weight: .semibold))
-                .foregroundStyle(Theme.textPrimary)
-            Text("用于读取通知，仅在本机处理")
-                .font(.system(size: 12))
+        HStack(spacing: 12) {
+            Image(systemName: "lock.shield")
+                .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(Theme.textSecondary)
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(Theme.subtleFill))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("需要完全磁盘访问权限")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text("用于读取通知，仅在本机处理")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
             Button("授权") { model.startAuthorizationGuide() }
                 .buttonStyle(PillButtonStyle(prominent: true))
         }
         .padding(14)
-        .background(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).fill(Theme.card))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .fill(Theme.card)
+                .shadow(color: .black.opacity(0.04), radius: 1.5, y: 1)
+        )
         .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
             .strokeBorder(Theme.cardStroke, lineWidth: 0.5))
     }

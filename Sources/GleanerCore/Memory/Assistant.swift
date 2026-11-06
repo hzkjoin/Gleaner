@@ -487,10 +487,14 @@ public struct Assistant: Sendable {
     func summaryRequest(_ messages: [ArchivedMessage], conversation: String, gaps: [String] = []) -> CompletionRequest {
         let gapRule = gaps.isEmpty ? "" : "\n- 下面列出的时段记录可能不全：不要把那段时间当成没人说话，也不要专门写一行说明记录缺失"
         let system = """
-        用两三句话告诉用户这段聊天在说什么。用户的称呼：\(names)。
-        - 像同事替他转述一样概括意思，不要按顺序复述每句话，不要写"某某说……某某又说……"
-        - 先说和他有关的：谁在找他、为了什么、需不需要他做什么；没有就直说"没有需要你处理的"
-        - 不分条，不用"- "开头，不超过 80 字；不要使用"·"符号
+        像一个靠谱的同事那样，用两三句话告诉用户这段消息在说什么，再给一个实在的建议。用户的称呼：\(names)。
+        - 先概括意思：谁、什么事、和他有什么关系；不要按顺序复述每句话，不要写"某某说……某某又说……"
+        - 再给建议：根据内容合理推测他接下来可以做什么，用"可以""不妨"这样的口吻，例如服务告警已恢复时"可以去确认下服务是否真的恢复了"，别人在等他回复时"可以先回一句告诉对方……"
+        - 建议要具体、能马上做，和内容直接相关；纯闲聊、确认收到这类实在没什么可做的，就说"留意一下就好"，不要硬编
+        - 验证码、登录提醒这类过了时效的消息不要建议拿去用，也不必提起
+        - 有人明确要他做的事要点明；记录里看不出时不要下"没有需要你处理的"这类绝对结论
+        - 直接用"你"称呼他
+        - 不分条，不用"- "开头，不超过 100 字；不要使用"·"符号
         - 不要寒暄、评价和开场白\(gapRule)
 
         \(RecordNote.text)
@@ -515,5 +519,5 @@ public struct Assistant: Sendable {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var names: String { userNames.isEmpty ? "未设置" : userNames.joined(separator: "、") }
+    var names: String { userNames.isEmpty ? "未设置" : userNames.joined(separator: "、") }
 }
