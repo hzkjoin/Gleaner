@@ -35,6 +35,14 @@ private struct NewsRow: View {
     @EnvironmentObject private var model: AppModel
     let item: NewsItem
     @State private var hovering = false
+    /// Showing the original text under the headline.
+    @State private var expanded = false
+
+    /// The original text, when it says more than the headline.
+    private var original: String? {
+        let text = item.sourceExcerpt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty || text == item.headline ? nil : text
+    }
 
     private var appName: String { AppDirectory.shared.name(for: item.appID) }
 
@@ -68,18 +76,35 @@ private struct NewsRow: View {
                             .foregroundStyle(Theme.textTertiary)
                     }
                 }
+                if expanded, let original {
+                    HStack(alignment: .top, spacing: 8) {
+                        RoundedRectangle(cornerRadius: 1).fill(Theme.divider).frame(width: 2)
+                        // Long mail stays a preview; the app has the rest.
+                        Text(original)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textSecondary)
+                            .lineSpacing(2)
+                            .lineLimit(8)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 2)
+                }
             }
             Spacer(minLength: 4)
-            IconButton(symbol: "xmark", help: "移除") { model.dismiss(item) }
-                .padding(.top, -4)
-                .opacity(hovering ? 1 : 0)
+            HStack(spacing: 0) {
+                IconButton(symbol: "arrow.up.right.square", help: "打开") { AppDirectory.shared.open(item.appID) }
+                IconButton(symbol: "xmark", help: "移除") { model.dismiss(item) }
+            }
+            .padding(.top, -4)
+            .opacity(hovering ? 1 : 0)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .onHover { hovering = $0 }
         .background(hovering ? Theme.subtleFill.opacity(0.5) : .clear)
-        .clickable { AppDirectory.shared.open(item.appID) }
-        .hoverHint(item.sourceExcerpt, followsPointer: true)
+        .clickable { if original != nil { expanded.toggle() } }
         .animation(.easeOut(duration: 0.15), value: hovering)
+        .animation(.easeOut(duration: 0.15), value: expanded)
     }
 }

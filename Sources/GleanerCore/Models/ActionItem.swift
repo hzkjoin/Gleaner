@@ -60,7 +60,9 @@ public struct ActionItem: Codable, Identifiable, Hashable, Sendable {
     /// A file the item refers to (a received file), opened from the card.
     public var attachmentPath: String?
     /// A calendar event or reminder proposed for the item, until the user adds or dismisses it.
-    public var schedule: ScheduleSuggestion?
+    /// Calendar events or reminders proposed for the item, until the user adds or dismisses
+    /// them; several when it names several times (a course on two days).
+    public var schedules: [ScheduleSuggestion] = []
     /// The source messages one by one, oldest first. Empty for items saved before it existed.
     public var sourceMessages: [String] = []
     /// When each of `sourceMessages` arrived, in the same order; nil where unknown. Empty for
@@ -244,8 +246,11 @@ public struct ActionItem: Codable, Identifiable, Hashable, Sendable {
 extension ActionItem {
     private enum CodingKeys: String, CodingKey {
         case id, summary, due, priority, kind, suggestedReply, appID, origin, sourceTitle, sourceExcerpt,
-             notificationDate, createdAt, snoozedUntil, sourceIDs, attachmentPath, schedule, sourceMessages, sourceFiles, sourceDates
+             notificationDate, createdAt, snoozedUntil, sourceIDs, attachmentPath, schedules, sourceMessages, sourceFiles, sourceDates
     }
+
+    /// Keys only read: earlier versions kept one suggestion under "schedule".
+    private enum LegacyKeys: String, CodingKey { case schedule }
 
     /// Decodes items saved by earlier versions, which lacked some of the newer fields.
     public init(from decoder: Decoder) throws {
@@ -267,7 +272,11 @@ extension ActionItem {
             sourceIDs: try c.decodeIfPresent([String].self, forKey: .sourceIDs) ?? [],
             attachmentPath: try c.decodeIfPresent(String.self, forKey: .attachmentPath)
         )
-        schedule = try c.decodeIfPresent(ScheduleSuggestion.self, forKey: .schedule)
+        if let saved = try c.decodeIfPresent([ScheduleSuggestion].self, forKey: .schedules) {
+            schedules = saved
+        } else if let single = try decoder.container(keyedBy: LegacyKeys.self).decodeIfPresent(ScheduleSuggestion.self, forKey: .schedule) {
+            schedules = [single]
+        }
         sourceMessages = try c.decodeIfPresent([String].self, forKey: .sourceMessages) ?? []
         sourceDates = try c.decodeIfPresent([Date?].self, forKey: .sourceDates) ?? []
         sourceFiles = try c.decodeIfPresent([String].self, forKey: .sourceFiles) ?? []

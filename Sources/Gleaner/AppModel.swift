@@ -366,7 +366,7 @@ final class AppModel: ObservableObject {
                 let suggestions = try await suggester.suggest(for: candidates)
                 guard let self, !suggestions.isEmpty else { return }
                 for index in items.indices {
-                    if let suggestion = suggestions[items[index].id] { items[index].schedule = suggestion }
+                    if let found = suggestions[items[index].id] { items[index].schedules = found }
                 }
                 saveItems()
                 log.info("Suggested \(suggestions.count) of \(candidates.count) items for the calendar")
@@ -376,22 +376,44 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Adds the (possibly edited) suggestion to Calendar or Reminders and files the item away.
+    /// Adds the (possibly edited) suggestion `original` to Calendar or Reminders. The item is
+    /// filed away once none of its suggestions is left.
     @discardableResult
-    func addSchedule(for item: ActionItem, _ suggestion: ScheduleSuggestion) async -> Bool {
+    func addSchedule(for item: ActionItem, _ original: ScheduleSuggestion, as edited: ScheduleSuggestion) async -> Bool {
         let app = AppDirectory.shared.name(for: item.appID)
         let source = item.sourceTitle.isEmpty ? app : "\(app)「\(item.sourceTitle)」"
         let note = [source, item.sourceExcerpt].filter { !$0.isEmpty }.joined(separator: "\n")
-        guard await calendar.add(suggestion, source: note) else { return false }
-        resolve([item], as: .scheduled)
+        guard await calendar.add(edited, source: note) else { return false }
+        finishSchedule(original, of: item, added: true)
         refreshEvents()
         return true
     }
 
-    func dismissSchedule(for item: ActionItem) {
+    /// Adds every suggestion of the item as proposed.
+    @discardableResult
+    func addAllSchedules(for item: ActionItem) async -> Bool {
+        for suggestion in item.schedules {
+            guard await addSchedule(for: item, suggestion, as: suggestion) else { return false }
+        }
+        return true
+    }
+
+    func dismissSchedule(_ suggestion: ScheduleSuggestion, of item: ActionItem) {
+        finishSchedule(suggestion, of: item, added: false)
+    }
+
+    /// Takes a handled suggestion off the item; with all handled and one added, the item is done.
+    private var scheduledAny: Set<UUID> = []
+
+    private func finishSchedule(_ suggestion: ScheduleSuggestion, of item: ActionItem, added: Bool) {
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
-        items[index].schedule = nil
-        saveItems()
+        if added { scheduledAny.insert(item.id) }
+        items[index].schedules.removeAll { $0 == suggestion }
+        if items[index].schedules.isEmpty && scheduledAny.remove(item.id) != nil {
+            resolve([items[index]], as: .scheduled)
+        } else {
+            saveItems()
+        }
     }
 
     // MARK: - Files
@@ -422,6 +444,12 @@ final class AppModel: ObservableObject {
 
     // MARK: - Opening items
 
+    /// The newest text of an item in Messages, when it came from Messages' own database.
+    func messageURL(for item: ActionItem) -> URL? {
+        guard item.appID.lowercased() == MessagesSource.appID.lowercased() else { return nil }
+        return item.sourceIDs.reversed().lazy.compactMap(MessagesSource.url(forNotificationID:)).first
+    }
+
     /// The WeChat chat to open for an item, when finding chats is on and possible. Logs why not
     /// for WeChat items.
     func weChatChat(for item: ActionItem) -> String? {
@@ -438,11 +466,15 @@ final class AppModel: ObservableObject {
         return name
     }
 
-    /// Opens where the item came from: the message itself for mail, the chat for WeChat,
-    /// otherwise the app.
+    /// Opens where the item came from: the message itself for mail and texts, the chat for
+    /// WeChat, otherwise the app.
     func open(_ item: ActionItem) {
         if let chat = weChatChat(for: item) {
             Task { await WeChatLocator.open(conversation: chat) }
+            return
+        }
+        if let url = messageURL(for: item) {
+            NSWorkspace.shared.open(url)
             return
         }
         guard item.appID.lowercased() == MailSource.appID,

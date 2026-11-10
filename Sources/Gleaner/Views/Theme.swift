@@ -168,7 +168,7 @@ private struct HintBubble: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(RoundedRectangle(cornerRadius: min(max(size.height / 2, 6), 10), style: .continuous)
-                .fill(Theme.ink.opacity(0.9)))
+                .fill(Theme.ink))
             .fixedSize()
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
             .position(position)

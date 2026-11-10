@@ -271,21 +271,25 @@ struct LiveScheduleTests {
             item("参加明天下午的项目评审", due: "明天 15:00", excerpt: "明天下午三点在 3 楼会议室评审方案，大概一个半小时", from: "项目群"),
             item("提交第四季度报送数据", due: "11 月 20 日前", excerpt: "请于 11 月 20 日前通过系统提交第四季度经营数据", from: "综合部"),
             item("看一下新方案", excerpt: "有空看下新方案，提提意见", from: "王总"),
+            item("培训：11日、12日中午有课", due: "11日、12日中午", excerpt: "培训提醒：11 月 11 日（周三）中午 12:30，第三课：销售流程的合规性；11 月 12 日（周四）中午 12:30，第四课：适当性义务", from: "培训群"),
         ]
         let result = try await ScheduleSuggester(provider: configuration.makeProvider(apiKey: LiveModel.apiKey),
                                                  appName: { _ in "微信" }).suggest(for: items, now: now)
         let formatter = DateFormatter()
         formatter.dateFormat = "MM-dd HH:mm"
         for (index, item) in items.enumerated() {
-            if let s = result[item.id] {
-                print("\(index + 1). \(s.kind.rawValue) \(s.title) \(formatter.string(from: s.start))–\(formatter.string(from: s.effectiveEnd)) allDay=\(s.allDay) 地点=\(s.location)")
+            if let found = result[item.id] {
+                for s in found {
+                    print("\(index + 1). \(s.kind.rawValue) \(s.title) \(formatter.string(from: s.start))–\(formatter.string(from: s.effectiveEnd)) allDay=\(s.allDay) 地点=\(s.location)")
+                }
             } else {
                 print("\(index + 1). not worth")
             }
         }
-        #expect(result[items[0].id]?.kind == .event)
+        #expect(result[items[0].id]?.first?.kind == .event)
         #expect(result[items[1].id] != nil)
         #expect(result[items[2].id] == nil)
+        #expect(result[items[3].id]?.count == 2)
     }
 }
 

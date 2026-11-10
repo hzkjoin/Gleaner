@@ -44,3 +44,11 @@ struct SourceDatesTests {
         #expect(decoded.messageDates == [nil])
     }
 }
+
+struct MessagesLinkTests {
+    @Test func messageIDsBecomeLinks() {
+        #expect(MessagesSource.url(forNotificationID: "message-ABC-123")?.absoluteString == "sms://open?message-guid=ABC-123")
+        #expect(MessagesSource.url(forNotificationID: "notif-1") == nil)
+        #expect(MessagesSource.url(forNotificationID: "message-") == nil)
+    }
+}

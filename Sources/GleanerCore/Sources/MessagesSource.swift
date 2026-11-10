@@ -12,6 +12,15 @@ public struct MessagesSource: NotificationSource {
         .appendingPathComponent("Library/Messages")
     public static let appID = "com.apple.MobileSMS"
 
+    /// Opens Messages at a message: `sms://open?message-guid=…`, from the id of a notification
+    /// this source made ("message-<guid>"); nil for other ids.
+    public static func url(forNotificationID id: String) -> URL? {
+        guard id.hasPrefix("message-") else { return nil }
+        let guid = String(id.dropFirst("message-".count))
+        guard !guid.isEmpty, let encoded = guid.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return nil }
+        return URL(string: "sms://open?message-guid=\(encoded)")
+    }
+
     public let directory: URL
 
     public init(directory: URL = MessagesSource.defaultDirectory) {

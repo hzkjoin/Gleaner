@@ -54,14 +54,17 @@ public struct ScheduleSuggester: Sendable {
     /// Items worth asking about: not codes or files, and with a due time or a time in the text.
     public static func candidates(_ items: [ActionItem]) -> [ActionItem] {
         items.filter { item in
-            guard item.kind != .code, item.attachmentPath == nil, item.schedule == nil else { return false }
+            guard item.kind != .code, item.attachmentPath == nil, item.schedules.isEmpty else { return false }
             if !item.due.isEmpty { return true }
             return DueDateParser.parse(item.summary + " " + item.sourceExcerpt, now: item.notificationDate) != nil
         }
     }
 
-    /// Suggestions by item id; items not worth scheduling are left out.
-    public func suggest(for items: [ActionItem], now: Date = Date()) async throws -> [UUID: ScheduleSuggestion] {
+    /// Several times for one item at most (a course over a few days, not a whole timetable).
+    static let perItemLimit = 6
+
+    /// Suggestions by item id, in time order; items not worth scheduling are left out.
+    public func suggest(for items: [ActionItem], now: Date = Date()) async throws -> [UUID: [ScheduleSuggestion]] {
         guard !items.isEmpty else { return [:] }
         let output = try await provider.complete(request(for: items, now: now))
         return parse(output, items: items, now: now)
@@ -81,6 +84,7 @@ public struct ScheduleSuggester: Sendable {
 
         - 值得添加：有明确日期或时间，用户需要参加，或要在那之前完成的事，如会议、电话、面试、约见、航班、截止日期
         - 不值得：没有具体时间、时间已经过去、只是新闻或别人的安排
+        - 同一个事项里有几个时间（如两天各有一节课、几场会议），每个时间各输出一条，index 相同，title 写出区别（如"第三课""第四课"）
         - type：要参加、有开始时间的用 event；要在某个时间之前完成的用 reminder
         - title：不超过 20 字，写清做什么，可以带上对方的称呼
         - start：本地时间，如 2026-11-06T15:00；只知道日期时写 2026-11-06，并把 all_day 设为 true
@@ -100,11 +104,11 @@ public struct ScheduleSuggester: Sendable {
         return CompletionRequest(system: system, user: user, jsonSchema: Self.schema)
     }
 
-    func parse(_ output: String, items: [ActionItem], now: Date) -> [UUID: ScheduleSuggestion] {
+    func parse(_ output: String, items: [ActionItem], now: Date) -> [UUID: [ScheduleSuggestion]] {
         guard let start = output.firstIndex(of: "{"), let end = output.lastIndex(of: "}"), start < end,
               let json = try? JSONSerialization.jsonObject(with: Data(output[start...end].utf8)) as? [String: Any],
               let suggestions = json["suggestions"] as? [[String: Any]] else { return [:] }
-        var result: [UUID: ScheduleSuggestion] = [:]
+        var result: [UUID: [ScheduleSuggestion]] = [:]
         for entry in suggestions {
             guard entry["worth"] as? Bool == true,
                   let index = entry["index"] as? Int, items.indices.contains(index - 1),
@@ -118,11 +122,16 @@ public struct ScheduleSuggester: Sendable {
             var endDate = date(entry["end"] as? String)?.0
             if let value = endDate, value <= startDate { endDate = nil }
             func text(_ key: String) -> String { (entry[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
-            result[items[index - 1].id] = ScheduleSuggestion(
+            let suggestion = ScheduleSuggestion(
                 kind: kind, title: String(title.prefix(40)), start: startDate, end: kind == .event && !allDay ? endDate : nil,
                 allDay: allDay, location: text("location"), notes: text("notes"))
+            let id = items[index - 1].id
+            // The same time twice is one suggestion.
+            guard !(result[id] ?? []).contains(where: { $0.start == suggestion.start && $0.kind == suggestion.kind }),
+                  (result[id]?.count ?? 0) < Self.perItemLimit else { continue }
+            result[id, default: []].append(suggestion)
         }
-        return result
+        return result.mapValues { $0.sorted { $0.start < $1.start } }
     }
 
     /// "2026-11-06T15:00" (or with seconds) or "2026-11-06"; the flag is true for a date alone.

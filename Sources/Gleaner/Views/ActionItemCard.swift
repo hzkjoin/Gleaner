@@ -30,8 +30,8 @@ struct ActionItemCard: View {
                 }
                 if !entries.isEmpty { SourceList(entries: entries) }
             }
-            if let schedule = item.schedule {
-                ScheduleBox(item: item, suggestion: schedule).padding(.top, 2)
+            if !item.schedules.isEmpty {
+                ScheduleList(item: item).padding(.top, 2)
             }
             if item.kind.acceptsReply && !item.suggestedReply.isEmpty {
                 ReplyBox(item: item).padding(.top, 2)
@@ -83,7 +83,7 @@ struct ActionItemCard: View {
                     if item.kind != .code {
                         IconButton(symbol: "sparkles", help: "提问") { model.startChat(about: model.attachment(for: item)) }
                     }
-                    if item.kind != .code && item.schedule == nil {
+                    if item.kind != .code && item.schedules.isEmpty {
                         IconMenu(symbol: "calendar.badge.plus", help: "加到日程") {
                             let due = model.due(of: item)
                             Button(due.map { "提醒事项（\(Self.describe($0))）" } ?? "提醒事项") {
@@ -377,6 +377,39 @@ private struct CodeBox: View {
 }
 
 /// A proposed calendar event or reminder: what, when and where, added once the user confirms.
+/// The item's proposed events or reminders, each on its own; with several, one button adds all.
+private struct ScheduleList: View {
+    @EnvironmentObject private var model: AppModel
+    let item: ActionItem
+    @State private var addingAll = false
+    @State private var failed = false
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            ForEach(item.schedules, id: \.self) { ScheduleBox(item: item, suggestion: $0) }
+            if item.schedules.count > 1 {
+                HStack(spacing: 8) {
+                    if failed {
+                        Text("没有日历或提醒事项的权限").font(.system(size: 11.5)).foregroundStyle(Theme.caution)
+                    }
+                    Button(item.schedules.allSatisfy { $0.kind == .event } ? "全部加到日历" : "全部添加") {
+                        addingAll = true
+                        failed = false
+                        Task {
+                            failed = !(await model.addAllSchedules(for: item))
+                            addingAll = false
+                        }
+                    }
+                    .buttonStyle(PillButtonStyle(prominent: true))
+                    .disabled(addingAll)
+                }
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {}
+    }
+}
+
 private struct ScheduleBox: View {
     @EnvironmentObject private var model: AppModel
     let item: ActionItem
@@ -445,7 +478,7 @@ private struct ScheduleBox: View {
                 }
             }
             Spacer(minLength: 4)
-            IconButton(symbol: "xmark", help: "不用") { model.dismissSchedule(for: item) }
+            IconButton(symbol: "xmark", help: "不用") { model.dismissSchedule(suggestion, of: item) }
                 .padding(.vertical, -6)
         }
     }
@@ -489,7 +522,7 @@ private struct ScheduleBox: View {
         var confirmed = draft
         confirmed.title = confirmed.title.trimmingCharacters(in: .whitespaces)
         Task {
-            let saved = await model.addSchedule(for: item, confirmed)
+            let saved = await model.addSchedule(for: item, suggestion, as: confirmed)
             adding = false
             failed = !saved
         }

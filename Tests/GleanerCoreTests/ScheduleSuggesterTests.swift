@@ -40,10 +40,10 @@ import Testing
         """
         let result = try await suggester(output).suggest(for: items, now: now)
         #expect(result.count == 2)
-        let event = try #require(result[items[0].id])
+        let event = try #require(result[items[0].id]?.first)
         #expect(event.kind == .event && event.title == "项目评审会" && event.location == "3 楼会议室" && !event.allDay)
         #expect(event.effectiveEnd.timeIntervalSince(event.start) == 5400)
-        let reminder = try #require(result[items[1].id])
+        let reminder = try #require(result[items[1].id]?.first)
         #expect(reminder.kind == .reminder && reminder.allDay && reminder.end == nil && reminder.notes == "通过系统提交")
     }
 
@@ -69,12 +69,34 @@ import Testing
 
     @Test func itemsFromBeforeSuggestionsStillLoad() throws {
         var saved = item("开会")
-        saved.schedule = ScheduleSuggestion(kind: .event, title: "开会", start: now)
+        saved.schedules = [ScheduleSuggestion(kind: .event, title: "开会", start: now)]
         let data = try JSONEncoder().encode(saved)
-        #expect(try JSONDecoder().decode(ActionItem.self, from: data).schedule?.title == "开会")
+        #expect(try JSONDecoder().decode(ActionItem.self, from: data).schedules.first?.title == "开会")
         var json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        json.removeValue(forKey: "schedule")
+        json.removeValue(forKey: "schedules")
         let old = try JSONSerialization.data(withJSONObject: json)
-        #expect(try JSONDecoder().decode(ActionItem.self, from: old).schedule == nil)
+        #expect(try JSONDecoder().decode(ActionItem.self, from: old).schedules.isEmpty)
+    }
+
+    @Test func oneItemCanHaveSeveralTimes() async throws {
+        let items = [item("培训提醒", due: "11日、12日中午", excerpt: "11 月 11 日中午 12:30 第三课；11 月 12 日中午 12:30 第四课")]
+        let output = """
+        {"suggestions":[
+         {"index":1,"worth":true,"type":"event","title":"培训第四课","start":"2026-11-12T12:30","end":"2026-11-12T13:30","all_day":false,"location":"","notes":""},
+         {"index":1,"worth":true,"type":"event","title":"培训第三课","start":"2026-11-11T12:30","end":"2026-11-11T13:30","all_day":false,"location":"","notes":""},
+         {"index":1,"worth":true,"type":"event","title":"重复","start":"2026-11-11T12:30","end":"","all_day":false,"location":"","notes":""}]}
+        """
+        let result = try await suggester(output).suggest(for: items, now: now)
+        // In time order, the repeated time dropped.
+        #expect(result[items[0].id]?.map(\.title) == ["培训第三课", "培训第四课"])
+    }
+
+    @Test func oneSavedSuggestionStillLoads() throws {
+        let saved = ActionItem(summary: "开会", priority: .medium, kind: .task, appID: "a", sourceTitle: "", sourceExcerpt: "", notificationDate: now)
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as! [String: Any]
+        json.removeValue(forKey: "schedules")
+        json["schedule"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ScheduleSuggestion(kind: .event, title: "开会", start: now)))
+        let loaded = try JSONDecoder().decode(ActionItem.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(loaded.schedules.map(\.title) == ["开会"])
     }
 }

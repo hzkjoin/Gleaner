@@ -34,6 +34,9 @@ struct ReplyBox: View {
         if let chat = model.weChatChat(for: item) {
             let reply = draft
             Task { await WeChatLocator.open(conversation: chat, reply: reply) }
+        } else if let url = model.messageURL(for: item) {
+            // Messages opens on the conversation, ready to paste.
+            NSWorkspace.shared.open(url)
         } else {
             AppDirectory.shared.open(item.appID)
         }
