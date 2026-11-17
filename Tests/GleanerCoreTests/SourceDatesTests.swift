@@ -52,3 +52,39 @@ struct MessagesLinkTests {
         #expect(MessagesSource.url(forNotificationID: "message-") == nil)
     }
 }
+
+struct DueDescriptionTests {
+    let calendar = Calendar(identifier: .gregorian)
+
+    func date(_ day: Int, _ hour: Int = 9) -> Date {
+        calendar.date(from: DateComponents(timeZone: .current, year: 2026, month: 11, day: day, hour: hour))!
+    }
+
+    func item(due: String, made: Date) -> ActionItem {
+        ActionItem(summary: "发会议链接", due: due, priority: .high, kind: .task, appID: "a", sourceTitle: "",
+                   sourceExcerpt: "", notificationDate: made, createdAt: made)
+    }
+
+    @Test func todayWrittenYesterdayReadsYesterday() {
+        let task = item(due: "今天 13:15 前", made: date(16))
+        #expect(task.dueDescription(now: date(16, 10)) == "今天 13:15 前")
+        #expect(task.dueDescription(now: date(17)) == "昨天 13:15 前")
+        #expect(task.dueDescription(now: date(15)) == "明天 13:15 前")
+    }
+
+    @Test func wordsWithoutADateStayAsWritten() {
+        #expect(item(due: "尽快", made: date(16)).dueDescription(now: date(17)) == "尽快")
+    }
+
+    @Test func datesOfTheirOwnStayAsWritten() {
+        #expect(item(due: "11月20日前", made: date(16)).dueDescription(now: date(17)) == "11月20日前")
+        #expect(item(due: "周五前", made: date(16)).dueDescription(now: date(17)) == "周五前")
+    }
+
+    @Test func timesOfDayGetTheirDay() {
+        let review = item(due: "下午评审前", made: date(16))
+        #expect(review.dueDescription(now: date(16, 10)) == "下午评审前")
+        #expect(review.dueDescription(now: date(17)) == "昨天 下午评审前")
+        #expect(item(due: "今晚", made: date(16)).dueDescription(now: date(17)) == "昨天晚上")
+    }
+}

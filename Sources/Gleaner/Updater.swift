@@ -41,7 +41,9 @@ final class Updater: NSObject, ObservableObject {
 
     /// Shows Sparkle's window: the pending update if one was found, otherwise a fresh check.
     func checkForUpdates() {
-        // Sparkle's windows need the app in front; a menu bar app usually isn't.
+        // Sparkle's windows need the app in front; a menu bar app usually isn't. The panel floats
+        // above normal windows and would cover them, so it closes first.
+        PanelDismissal.dismiss()
         NSApp.activate()
         controller?.checkForUpdates(nil)
     }

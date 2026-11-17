@@ -109,7 +109,7 @@ private struct GroupedItemLine: View {
                 .foregroundStyle(Theme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             if !item.due.isEmpty {
-                Text(item.due)
+                Text(item.dueDescription(now: model.now))
                     .font(.system(size: 11))
                     .foregroundStyle(item.priority == .high ? Theme.urgent : Theme.textTertiary)
             }

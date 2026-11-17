@@ -25,6 +25,34 @@ public enum DueDateParser {
         return Due(date: date, hasTime: true)
     }
 
+    /// The due date said from `now`: "昨天 13:15", "今天", "明天 09:00", "11月20日 周五".
+    public static func describe(_ due: Due, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let day = dayLabel(due.date, now: now, calendar: calendar, weekday: true)
+        guard due.hasTime else { return day }
+        let time = DateFormatter()
+        time.calendar = calendar
+        time.dateFormat = "HH:mm"
+        return day + " " + time.string(from: due.date)
+    }
+
+    /// "前天" … "后天" near `now`, otherwise "11月20日" (with the weekday if asked).
+    public static func dayLabel(_ date: Date, now: Date = Date(), calendar: Calendar = .current, weekday: Bool = false) -> String {
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 0
+        switch days {
+        case -2: return "前天"
+        case -1: return "昨天"
+        case 0: return "今天"
+        case 1: return "明天"
+        case 2: return "后天"
+        default:
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "zh_CN")
+            formatter.calendar = calendar
+            formatter.dateFormat = weekday ? "M月d日 EEE" : "M月d日"
+            return formatter.string(from: date)
+        }
+    }
+
     // MARK: - Day
 
     static func parseDay(_ text: String, now: Date, calendar: Calendar) -> Date? {

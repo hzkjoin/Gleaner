@@ -86,11 +86,11 @@ struct ActionItemCard: View {
                     if item.kind != .code && item.schedules.isEmpty {
                         IconMenu(symbol: "calendar.badge.plus", help: "加到日程") {
                             let due = model.due(of: item)
-                            Button(due.map { "提醒事项（\(Self.describe($0))）" } ?? "提醒事项") {
+                            Button(due.map { "提醒事项（\(DueDateParser.describe($0))）" } ?? "提醒事项") {
                                 Task { await model.schedule(item, as: .reminder) }
                             }
                             if let due {
-                                Button("日历（\(Self.describe(due))）") { Task { await model.schedule(item, as: .event) } }
+                                Button("日历（\(DueDateParser.describe(due))）") { Task { await model.schedule(item, as: .event) } }
                             }
                         }
                     }
@@ -141,7 +141,7 @@ struct ActionItemCard: View {
     private var dueLine: some View {
         HStack(spacing: 4) {
             Image(systemName: "clock").font(.system(size: 10.5))
-            Text(item.due)
+            Text(item.dueDescription(now: model.now))
         }
         .font(.system(size: 11.5))
         .foregroundStyle(item.priority == .high ? Theme.urgent : Theme.textSecondary)
@@ -149,19 +149,6 @@ struct ActionItemCard: View {
 }
 
 // MARK: - Parts
-
-extension ActionItemCard {
-    /// "今天 15:00", "明天", "11月8日 10:00".
-    static func describe(_ due: DueDateParser.Due) -> String {
-        let calendar = Calendar.current
-        let day: String
-        if calendar.isDateInToday(due.date) { day = "今天" }
-        else if calendar.isDateInTomorrow(due.date) { day = "明天" }
-        else { day = due.date.formatted(.dateTime.locale(Locale(identifier: "zh_CN")).month().day()) }
-        guard due.hasTime else { return day }
-        return day + " " + due.date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
-    }
-}
 
 struct AppIcon: View {
     let bundleID: String

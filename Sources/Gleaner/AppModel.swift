@@ -519,9 +519,7 @@ final class AppModel: ObservableObject {
     enum ScheduleTarget { case reminder, event }
 
     /// When the item is due, if its due text can be read.
-    func due(of item: ActionItem) -> DueDateParser.Due? {
-        DueDateParser.parse(item.due, now: item.createdAt)
-    }
+    func due(of item: ActionItem) -> DueDateParser.Due? { item.dueDate }
 
     /// Hands the item to Reminders or Calendar and files it away; false when access was refused.
     @discardableResult

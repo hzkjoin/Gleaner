@@ -39,7 +39,7 @@ struct OverviewTests {
         task.setSources([AppNotification(id: "1", appID: "com.tencent.xinwechat", title: "周凯", body: "下午评审前给我个意见", date: now)])
         let request = Assistant(provider: StubProvider([])).overviewRequest(items: [task], now: now, appName: { _ in "微信" })
         #expect(request.user.contains("[1] 待办"))
-        #expect(request.user.contains("截止：下午评审前"))
+        #expect(request.user.contains("下午评审前"))
         #expect(request.user.contains("下午评审前给我个意见"))
         #expect(request.system.contains(RecordNote.text))
     }

@@ -109,6 +109,29 @@ public struct ActionItem: Codable, Identifiable, Hashable, Sendable {
         case file(sender: String?, path: String)
     }
 
+    /// The due date, read from the model's words ("今天 13:15 前") as of when the item was made.
+    public var dueDate: DueDateParser.Due? {
+        DueDateParser.parse(due, now: createdAt)
+    }
+
+    /// Day words that mean a different day as time passes, longest first.
+    static let relativeDayWords = ["大后天", "后天", "明天", "明早", "明晚", "明日", "今天", "今晚", "今早", "今日"]
+
+    /// The due text as of `now`, keeping the model's words: "今天 13:15 前" written yesterday
+    /// reads "昨天 13:15 前", and "下午评审前" written yesterday reads "昨天 下午评审前".
+    /// Texts with a date of their own ("11月20日前") or none at all ("尽快") are kept as written.
+    public func dueDescription(now: Date = Date(), calendar: Calendar = .current) -> String {
+        guard let date = dueDate else { return due }
+        let day = DueDateParser.dayLabel(date.date, now: now, calendar: calendar)
+        if let word = Self.relativeDayWords.first(where: { due.contains($0) }) {
+            let part = word.hasSuffix("晚") ? "晚上" : (word.hasSuffix("早") ? "早上" : "")
+            return due.replacingOccurrences(of: word, with: day + part)
+        }
+        let namesDay = due.range(of: #"\d{1,2}[月/-]\d{1,2}|\d{1,2}[日号]|周|星期|礼拜"#, options: .regularExpression) != nil
+        if !namesDay, !calendar.isDate(createdAt, inSameDayAs: now) { return day + " " + due }
+        return due
+    }
+
     /// Sets the source messages from notifications, in time order, with when each arrived.
     public mutating func setSources(_ notes: [AppNotification]) {
         let ordered = notes.sorted { $0.date < $1.date }

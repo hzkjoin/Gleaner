@@ -97,7 +97,7 @@ extension Assistant {
         """
         let user = items.enumerated().map { index, item in
             var line = "[\(index + 1)] \(Self.kindLabel(item.kind))，优先级\(Self.priorityLabel(item.priority))"
-            if !item.due.isEmpty { line += "，截止：\(item.due)" }
+            if !item.due.isEmpty { line += "，截止：\(item.dueDescription(now: now))" }
             let source = [appName(item.appID), item.sourceTitle].filter { !$0.isEmpty }.joined(separator: "，")
             line += "\n来源：\(source)，\(time.string(from: item.notificationDate))\n摘要：\(item.summary)"
             let messages = zip(item.messages, item.messageDates).suffix(3).map { message, date in
